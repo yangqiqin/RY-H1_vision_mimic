@@ -3,18 +3,23 @@
 > **依据**：《睿研灵巧的SDK入门指南》V1.01（知识库）、官方 demo（`RyHandLibCANII_rs485_pcan_16.py`、`RyHandLibPCAN_windows16.cpp`、`RyHandLib.h`）、RY-H1(16) 手册。
 >
 > **目标**：Windows 上 **只通过摄像头 + 灵巧手** 实现视觉动作模仿，无需机械臂、无需 Ubuntu。每个模块可**单独验证**，另有综合验证脚本一次跑通。
+>
+> **📚 代码详解**：每个源码文件的逐函数中文注释见 [`docs/代码详解/`](docs/代码详解/README.md)（架构总览 + 10 个文件独立详解）。
 
 ```
-USB摄像头 / Intel L515 ──▶ camera/ ──▶ vision/ (MediaPipe 16关节角)
-                                          │
-                                          ▼
-                           hand/angles2motor (16关节弧度→电机指令)
-                                          │
-                                          ▼
-                           hand/hand_controller (RyhandLibx64.dll + PCAN/CANII/RS485)
-                                          │
-                                          ▼
-                                    RY-H1(16) 灵巧手
+USB摄像头 / Intel L515 ──▶ lib/camera_lib1 ──▶ vision/hand_pose (MediaPipe 16关节角 + 深度握拳置信度)
+                                                    │
+                                                    ▼
+                            vision/postprocess (方向一致性异常检测 + 中值 + OneEuro + 分通道限速)
+                                                    │
+                                                    ▼
+                            hand/angles2motor (16关节弧度→电机指令)
+                                                    │
+                                                    ▼
+                            hand/hand_controller (RyhandLibx64.dll + PCAN/CANII/RS485)
+                                                    │
+                                                    ▼
+                                            RY-H1(16) 灵巧手
 ```
 
 ---
@@ -23,15 +28,18 @@ USB摄像头 / Intel L515 ──▶ camera/ ──▶ vision/ (MediaPipe 16关�
 
 | 模块 | 文件 | 单项验证 | 说明 |
 |---|---|---|---|
-| 摄像头 | `camera/camera_module.py` | `apps/test_camera.py` | USB UVC / **L515 RGB-D**（含连通性检查） |
-| 姿态估计 | `vision/hand_pose.py` | `test_all.py` 第 3 步 | MediaPipe → 16 关节弧度 |
+| 摄像头 | `lib/camera_lib1.py`（GUI 实际用）/ `camera/camera_module.py` | `apps/test_camera.py` | USB UVC / **L515 RGB-D**（含连通性检查、帧时间戳、landmarks_to_3d） |
+| 姿态估计 | `vision/hand_pose.py` | `test_all.py` 第 3 步 | MediaPipe → 16 关节弧度 + 深度握拳置信度 |
 | 关节换算 | `hand/angles2motor.py` | `test_all.py` 第 4 步 | demo 公式 + 左右手 |
-| **灵巧手控制** | `hand/hand_controller.py` | **`apps/test_hand.py`** | 连接性自检 + 状态读取 + 动作 |
+| 精度后处理 | `vision/postprocess.py` | `python vision/postprocess.py`（自测） | 方向一致性异常检测 + 中值 + OneEuro + 分通道限速 |
+| **灵巧手控制** | `hand/hand_controller.py` | **`apps/test_hand.py`** | 连接性自检 + 状态读取 + 动作 + 回零/行程 |
 | 通信层 | `hand/transport.py` | （被控制器调用） | PCAN / CANalyst-II / RS485 |
-| **GUI 控制** | **`gui/hand_gui.py`** | `python -m gui.hand_gui` | 连接测试 + 16 关节滑条 + 预设动作 |
+| **GUI 主界面** | **`gui/main_gui.py`** | `python -m gui.main_gui` | 实时画面 + 骨架/关节角 + 校准滑条 + 动作模仿 + 手控 |
+| GUI 简版 | `gui/hand_gui.py` | `python -m gui.hand_gui` | 连接测试 + 16 关节滑条 + 预设动作 |
 | 动作模仿 | `apps/mimic_demo.py` | 直接运行 | 摄像头 → 姿态 → 灵巧手 |
 | **综合验证** | **`apps/test_all.py`** | 直接运行 | 依赖+摄像头+姿态+换算+灵巧手一次跑通 |
 | 环境自检 | `selfcheck.py` | 直接运行 | 不接硬件也能跑大部分 |
+| 诊断 | `apps/diag_camera.py` / `apps/diag_motor.py` | 直接运行 | L515 深度诊断 / 电机行程·找零·故障码 |
 
 ---
 
@@ -83,7 +91,7 @@ python -m pip install -r requirements.txt
    pip install pyrealsense2==2.54.2.5684
    ```
 3. **深度流与 RGB 流分开设分辨率**（L515 彩色/深度分辨率不同，README_1.md 例1/例2）：
-   本工程已按 **RGB 1280×720 + 深度 1040×768** 配置（`camera_module.py` 的 `width/height` 与 `depth_width/depth_height` 分开）；
+   本工程已按 **RGB 1280×720 + 深度 1024×768** 配置（`camera_lib1.py`/`camera_module.py` 的 `width/height` 与 `depth_width/depth_height` 分开）；
 4. 先跑 `python apps/test_camera.py --list`：能看到设备即连通；返回空 = 驱动/线缆/供电问题；
 5. 再跑 `python apps/test_camera.py --realsense --show` 看 RGB+深度画面；
 6. 也可以先用官方 Intel RealSense Viewer 确认出图。
@@ -154,18 +162,26 @@ python -m gui.main_gui
    - `bend_gain`：**动作幅度偏小时调大**（1.0→1.5~2.0）；**幅度过大时调小**（→0.5~0.8）；
    - `bend_scale/bend_offset`：整体缩放/偏置；
    - `deadzone`：抖动过滤（越大越不灵敏）；
+   - **平滑强度(1€ min_cutoff)**：越小越平滑（静止更稳）；**跟手度(1€ beta)**：越大越跟手；
+   - **限速°/帧(max_delta)**：每帧角度最大变化，防突跳（默认 8，越小越稳）；
    - **弯曲方向反转**：勾选后"该伸直时弯曲/该弯曲时伸直"互换（90°-θ）；
    - **距离比法**：四指默认用距离比法（更稳），取消则用三维夹角法；
-   - `每指增益`：各指弯曲灵敏度单独调（如拇指 1.2）；
-   - 观察"实时参数"里的 16 关节角，边看边调；
+   - `每指增益/偏移`：各指弯曲灵敏度/偏置单独调（如拇指 1.2）；
+   - **拇指内外展校准**（关节16）：`内外展死区(thumb_abd_offset)` 切除并拢时的底部无效区间、
+     `内外展增益(thumb_abd_gain)` 放大横向距离、`内外展限速°/帧(abduct_max_delta)` 控制内外展
+     单帧变化速度（默认 3，若"跳变太快"调小到 1.5~2.0）、`内外展反转` 开关切方向；
+   - 观察"实时参数"里的 16 关节角、横向距离、**握拳置信(深度)** 与稳定性指标（抖动std/丢弃率），边看边调；
 4. **动作模仿**：勾选【动作模仿】→ 摄像头前做手势，灵巧手跟随
-   （平滑系数可调，首次建议 bend_gain 从 1.0 试起，确认方向再加大）；
-5. **手动控制**：底部 16 关节滑条逐个调试；预设按钮（张开/握拳/放松）；
+   （内部自动走"多帧均值 → 死区 → 方向一致性异常检测 → 中值 → One Euro → 分通道限速"，
+   深度确认握拳（`握拳置信≥0.6`）时豁免异常判定，**握拳不会卡住**；
+   首次建议 bend_gain 从 1.0 试起，确认方向再加大）；
+5. **手动控制**：底部 16 关节滑条逐个调试；预设按钮（张开/握拳/放松/归零）；
    单电机测试（ID+位置）排查无响应电机；
 6. 退出：关闭窗口自动释放相机/断开手。
 
-> 综合界面同时调用 **RGB + 深度**（L515）：深度帧用于手部距离显示，
-> 姿态估计用 3D 关键点（x,y,z）计算夹角，比纯 2D 精度更高、动作幅度更真实。
+> 综合界面同时调用 **RGB + 深度**（L515）：深度帧用于手部距离显示、拇指内外展的
+> **3D 横向距离**计算，以及**深度辅助握拳判定**（四指指尖到掌心 3D 距离 / 半掌宽，
+> 张开≈0、握拳≈1）——比纯 2D 精度更高、动作幅度更真实、握拳不抖动不卡手。
 
 ---
 
@@ -199,7 +215,7 @@ python -m gui.main_gui
 
 ---
 
-## 5. 控制模型（与官方 demo 对齐）
+## 6. 控制模型（与官方 demo 对齐）
 
 - **16 关节 ID 1~16**（弧度输入）：拇指侧摆/近节/远节、食指…、小指远节、第16关节(0~110°)；
 - **换算**（demo `update_motor_positions`）：`M1=k(θ1/2+θ2)`、`M2=k(−θ1/2+θ2)`、`M3=θ3·(4095/75)`、`M16=θ16·(4095/110)`，k=4095/90；
@@ -209,7 +225,32 @@ python -m gui.main_gui
 
 ---
 
-## 6. 路径引导说明（重要：解决"运行子目录文件找不到根目录资源"）
+## 7. 精度后处理链（解决"抖动/握拳卡住/内外展跳变"，修改8）
+
+`gui/main_gui.py::_mimic_apply` 的完整链路（每帧执行）：
+
+```
+16 关节角(度)
+  → ① 多帧均值(5帧)        去单帧毛刺
+  → ② deadzone 死区         |角度|<阈值 → 0（防微颤）
+  → ③ 方向一致性异常检测    真实握拳(多指协调)不丢弃；孤立单指突变才抑制
+  → ④ 中值滤波(5帧)        去单通道毛刺
+  → ⑤ One Euro 平滑         min_cutoff 越小越平滑、beta 越大越跟手
+  → ⑥ 分通道限速             关节16 用 abduct_max_delta(3°/帧)，其余 max_delta(8°/帧)
+  → 弧度化 → move_joints 下发
+```
+
+关键设计（`vision/postprocess.py`）：
+- **方向一致性异常检测**：计算每通道相对上一帧跳变，取最大 `jump_max` 与中位 `jump_med`；
+  仅当 `jump_max > 40°` **且** `jump_max > 3 × jump_med`（孤立单指突变）才判异常，
+  用**中值替代**而非整帧丢弃 → 握拳（协调运动）绝不卡住；
+- **深度辅助豁免**：L515 深度给出 `fist_confidence`（四指指尖到掌心 3D 距离/半掌宽），
+  ≥ 0.6（确认真实握拳）时**跳过异常判定**——双保险；
+- **分通道限速**：内外展（0~110° 大行程）单独小限速，防"跳变太快"。
+
+---
+
+## 8. 路径引导说明（重要：解决"运行子目录文件找不到根目录资源"）
 
 **问题**：直接运行 `python apps/test_hand.py` 时，Python 只把 `apps/` 加入 `sys.path`，
 导致找不到根目录的 `hand/camera/vision` 包；同时 `RyhandLibx64.dll`、
@@ -246,7 +287,7 @@ except Exception:
 
 ---
 
-## 7. 常见问题
+## 9. 常见问题
 
 | 现象 | 处理 |
 |---|---|
@@ -257,6 +298,23 @@ except Exception:
 | MediaPipe 卡 | 降 `--rate`；低分辨率；用 GPU 机型 |
 | 手方向反/幅度大 | `--hand-lr` 与手型一致；`--scale 0.3` 起步；调 `hand_pose.py` 阈值 |
 | GUI 滑条不动 | 先点"连接"；确认 `test_hand` 通过 |
+| **握拳时手卡住不动（旧版现象）** | 已修复（修改8）：方向一致性异常检测 + 深度握拳确认，真实握拳不再被误判丢弃。请用最新 `vision/postprocess.py`；若仍卡，确认 GUI 用的是 L515 深度模式（有 `握拳置信(深度)` 显示） |
+| **拇指内外展跳变太快** | 调小"内外展限速°/帧"（`abduct_max_delta`，1.5~2.0）；或调大"内外展增益/死区"让映射更缓 |
+| **动作模仿不跟随/幅度小** | 确认勾选【动作模仿】、手已连接、`bend_gain` ≥1.0；L515 模式下看"实时参数"的关节角是否有变化 |
+| 静止仍抖动 | 调小"平滑强度(1€ min_cutoff)"（0.3~0.5）、调大 `deadzone` |
+
+---
+
+## 10. 文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/代码详解/00_总览详解.md`](docs/代码详解/00_总览详解.md) | 系统架构、数据流、16 关节控制模型、模块依赖、校准参数全景、常见问题速查 |
+| [`docs/代码详解/01~10_*.md`](docs/代码详解/README.md) | 每个核心源码文件的逐函数中文注释（配置/换算/控制器/传输/相机/姿态/后处理/GUI/路径） |
+| [`修改记录文档.md`](修改记录文档.md) | 按时间顺序的每次修改：现象/根因/改法/验证 |
+| [`错误排查手册.md`](错误排查手册.md) | 按"现象→原因→处理"组织的完整排障手册 |
+| [`控制精度提升方案.md`](控制精度提升方案.md) | 精度提升的理论依据（4 篇论文）+ 分阶段实施方案与调参流程 |
+| `rycan_vision_hand/README.md` | Ubuntu/SocketCAN 版说明 |
 
 ---
 
