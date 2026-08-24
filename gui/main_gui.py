@@ -363,11 +363,11 @@ class MainGui:
         """添加单个滑条行（紧凑，适合方形面板全部显示）"""
         f = ttk.Frame(parent)
         f.pack(fill="x", padx=2, pady=0)
-        ttk.Label(f, text=label, width=6, font=("", 8)).pack(side="left")
+        ttk.Label(f, text=label, width=12, font=("", 8), anchor="w").pack(side="left")
         tk.Scale(f, from_=from_, to=to, resolution=resolution, orient=tk.HORIZONTAL,
-                 variable=var, length=110, showvalue=False,
+                 variable=var, length=120, showvalue=False,
                  command=lambda _: self._apply_calib()).pack(side="left", fill="x", expand=True)
-        ttk.Label(f, textvariable=var, width=5, font=("", 8)).pack(side="left")
+        ttk.Label(f, textvariable=var, width=5, font=("", 8), anchor="e").pack(side="left")
 
     def _add_param_group(self, parent, keys):
         """添加参数组（每个参数一个滑条）"""

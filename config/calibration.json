@@ -2,7 +2,7 @@
   "bend_gain": 1.0238095238095237,
   "bend_scale": 1.0,
   "bend_offset": 0.0,
-  "deadzone": 2.698412698412698,
+  "deadzone": 2.5,
   "smooth": 0.22698412698412698,
   "min_cutoff": 0.5,
   "beta": 0.02,
