@@ -1,0 +1,33 @@
+{
+  "bend_gain": 1.0238095238095237,
+  "bend_scale": 1.0,
+  "bend_offset": 0.0,
+  "deadzone": 2.698412698412698,
+  "smooth": 0.22698412698412698,
+  "min_cutoff": 0.5,
+  "beta": 0.02,
+  "max_delta": 6.0,
+  "thumb_abd_offset": 0.06,
+  "thumb_abd_gain": 1.25,
+  "abduct_max_delta": 3.0,
+  "bend_reverse": false,
+  "thumb_abd_reverse": false,
+  "use_dist_ratio": false,
+  "show_skeleton": true,
+  "show_angles": true,
+  "mimic_on": true,
+  "per_finger_scale": {
+    "thumb": 0.5,
+    "index": 1.0,
+    "middle": 1.0,
+    "ring": 1.0,
+    "pinky": 1.0
+  },
+  "per_finger_offset": {
+    "thumb": 0.0,
+    "index": 0.0,
+    "middle": 0.0,
+    "ring": 0.0,
+    "pinky": 0.0
+  }
+}

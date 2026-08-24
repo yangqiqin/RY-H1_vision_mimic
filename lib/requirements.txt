@@ -1,0 +1,28 @@
+# ============================================================
+# RY-H1(16) 灵巧手 · Windows 视觉动作模仿 —— 依赖清单
+# 安装：python -m pip install -r requirements.txt
+# ============================================================
+
+# 视觉
+numpy>=1.24
+opencv-python>=4.8
+# MediaPipe Tasks 新版（mp.solutions.hands 已废弃；1.x 用 hand_landmarker.task）
+mediapipe>=0.10.14
+# 综合界面视频显示（gui/main_gui.py）
+Pillow>=10.0
+
+# L515 RGB-D（可选，普通 USB 摄像头不需要；L515 需 USB3.0 直连 + Intel RealSense SDK 2.0 驱动）
+# ⚠️ 版本：知识库 README_1.md（L515 PyLive Toolkit）指明 L515 必须用此稳定版：
+pyrealsense2==2.54.2.5684
+
+# RS485 通信（只用 PCAN / CANalyst-II 时不需要）
+pyserial>=3.5
+
+# ------------------------------------------------------------
+# 厂商 / 驱动文件（放入本目录，按需）：
+#   1. SDK 库：RyhandLibx64.dll（Windows x64）或 RyhandLibx86.dll
+#   2. PCAN：PCANBasic.py + PCAN 官方驱动（Peak PCAN-USB）
+#   3. CANalyst-II：ControlCAN.py + ControlCAN.dll（周立功）
+#   这些文件在官方 demo 包（ryhand_windows_python_canii_rs485_pcan_16.zip）中，
+#   也已在知识库中保存。
+# ------------------------------------------------------------
