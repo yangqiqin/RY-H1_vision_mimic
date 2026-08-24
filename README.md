@@ -83,7 +83,7 @@ python -m pip install -r requirements.txt
    pip install pyrealsense2==2.54.2.5684
    ```
 3. **深度流与 RGB 流分开设分辨率**（L515 彩色/深度分辨率不同，README_1.md 例1/例2）：
-   本工程已按 **RGB 1280×720 + 深度 640×480** 配置（`camera_module.py` 的 `width/height` 与 `depth_width/depth_height` 分开）；
+   本工程已按 **RGB 1280×720 + 深度 1040×768** 配置（`camera_module.py` 的 `width/height` 与 `depth_width/depth_height` 分开）；
 4. 先跑 `python apps/test_camera.py --list`：能看到设备即连通；返回空 = 驱动/线缆/供电问题；
 5. 再跑 `python apps/test_camera.py --realsense --show` 看 RGB+深度画面；
 6. 也可以先用官方 Intel RealSense Viewer 确认出图。
