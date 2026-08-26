@@ -321,6 +321,7 @@ def visible(self) -> bool:
 | `use_distance_ratio` | False | 是否用**距离比率法**算弯曲（替代向量夹角法） |
 | `per_finger_scale` | None | 每指独立缩放，如 `{"index": 0.8}` |
 | `per_finger_offset` | None | 每指独立偏移，如 `{"index": 5.0}` |
+| `per_finger_swing_offset` | None | **每指侧摆零位偏移**（新增），如 `{"index": 2.3}`，用于校准手指伸直时的侧摆偏差 |
 | `model_path` | None | 模型文件路径，None 时走自动搜索 |
 | `thumb_abd_offset` | 0.0 | 内外展死区（半掌宽倍数，GUI 范围 0~0.5） |
 | `thumb_abd_gain` | 0.8 | 内外展有效区增益（GUI 范围 0.3~2.0） |
@@ -373,6 +374,7 @@ self._landmarker = vision.HandLandmarker.create_from_options(options)
 ```python
 self.bend_gain = max(0.1, float(bend_gain))          # 增益下限 0.1，防 0/负
 self.thumb_abd_gain = max(0.1, float(thumb_abd_gain)) # 同上
+self.per_finger_swing_offset = dict(per_finger_swing_offset or {})  # 新增
 self._frame_scale = 1.0   # 预留的帧缩放因子（当前未参与计算）
 ```
 
@@ -398,6 +400,9 @@ def update_params(self, **kwargs):
             self.per_finger_scale.update({str(x): float(y) for x, y in v.items()})
         elif k == "per_finger_offset" and isinstance(v, dict):
             self.per_finger_offset.update({str(x): float(y) for x, y in v.items()})
+        # 新增：支持侧摆零位偏移的动态更新
+        elif k == "per_finger_swing_offset" and isinstance(v, dict):
+            self.per_finger_swing_offset.update({str(x): float(y) for x, y in v.items()})
         elif k == "thumb_abd_offset": self.thumb_abd_offset = float(v)
         elif k == "thumb_abd_gain": self.thumb_abd_gain = max(0.1, float(v))
         elif k == "thumb_abd_reverse": self.thumb_abd_reverse = bool(v)
@@ -744,27 +749,80 @@ else:
 
 **为什么 ±20 封顶**：灵巧手（RY-H1(16)）侧摆舵机行程有限（索引 0 的 GUI 滑杆范围就是 `(-20, 20)`，见 `main_gui.py` 第 126 行）。真实人手拇指侧摆可以很大（>40°），但硬件只支持 ±20°，超出部分饱和即可——既保护舵机，也避免大幅侧摆被当成弯曲干扰。
 
-### 16.3 四指侧摆（索引 3/6/9/12，第 594–617 行）
+### 16.3 四指侧摆（索引 3/6/9/12）—— 基于 MCP→PIP 指骨方向
+
+> **算法原理**：四指侧摆的本质是近端指骨（PIP 所在指节）绕 MCP 关节的左右旋转。因此，**用 `MCP → PIP` 向量（而非 `手腕 → MCP`）作为指骨朝向的描述，是物理正确的几何载体**。
 
 ```python
-finger_mcp_map = {"index": INDEX_MCP, "middle": MIDDLE_MCP,
-                  "ring": RING_MCP, "pinky": PINKY_MCP}
-swing_idx_map = {"index": 3, "middle": 6, "ring": 9, "pinky": 12}
-for fname, mcp_idx in finger_mcp_map.items():
-    v_finger = pts[mcp_idx] - wrist
-    proj = v_finger - np.dot(v_finger, normal) * normal    # 同样投影到掌面
-    if np.linalg.norm(proj) > 1e-8 and palm_len > 1e-8:
-        cos_angle = np.dot(proj, palm_axis) / (np.linalg.norm(proj) * palm_len)
-        cos_angle = np.clip(cos_angle, -1, 1)
-        angle = math.degrees(math.acos(cos_angle))
-        sign = 1 if np.dot(proj, perp) > 0 else -1
-        angles[swing_idx_map[fname]] = sign * min(angle, 20)
+# 四指侧摆：使用 MCP→PIP 向量 + 零位校准
+finger_pip_map = {
+    "index": (INDEX_MCP, INDEX_PIP),
+    "middle": (MIDDLE_MCP, MIDDLE_PIP),
+    "ring": (RING_MCP, RING_PIP),
+    "pinky": (PINKY_MCP, PINKY_PIP),
+}
+swing_idx_map = {
+    "index": 3,
+    "middle": 6,
+    "ring": 9,
+    "pinky": 12,
+}
+
+for fname, (mcp_idx, pip_idx) in finger_pip_map.items():
+    # ① 取 MCP→PIP 向量（这才是真实的指骨方向）
+    v_finger = pts[pip_idx] - pts[mcp_idx]
+
+    # ② 投影到手掌平面（剔除弯曲/垂直分量）
+    proj = v_finger - np.dot(v_finger, normal) * normal
+    proj_norm = np.linalg.norm(proj)
+
+    if proj_norm > 1e-8 and palm_len > 1e-8:
+        # ③ 使用 atan2 计算有符号角度（相对于主轴 palm_axis）
+        #    dot(proj, perp) 决定左右，dot(proj, palm_axis) 决定前后
+        angle_rad = math.atan2(np.dot(proj, perp), np.dot(proj, palm_axis))
+        angle_deg = math.degrees(angle_rad)   # 范围 -180~180
+
+        # ④ 应用零位校准（减去该手指的预设偏移）
+        offset = self.per_finger_swing_offset.get(fname, 0.0)
+        swing = angle_deg - offset
+
+        # ⑤ 截断至 ±20°（硬件行程）
+        swing = np.clip(swing, -20.0, 20.0)
+        angles[swing_idx_map[fname]] = float(swing)
     else:
-        angles[swing_idx_map[fname]] = 0
+        angles[swing_idx_map[fname]] = 0.0
 ```
 
-- 与拇指侧摆**完全相同**的套路：每根手指取 `MCP − WRIST` 向量 → 投影到掌面 → 与 `palm_axis` 求夹角 → 用 `perp` 点积定号 → ±20° 封顶。
-- 因为四指的 MCP 都大致沿掌宽方向排开，`proj` 与 `palm_axis` 的夹角天然能反映"这根手指往左/右撇了多少"。
+**逐条解读**：
+
+1. **为什么改用 MCP→PIP 而不是手腕→MCP**：
+   - 旧版使用 `pts[mcp_idx] - wrist`，本质是测量"掌骨基底在掌面上的投影角度"。但四指掌骨通过掌深横韧带刚性连接，几乎不产生相对运动，因此旧版算法在四指侧摆上只能捕捉到掌形变化带来的微弱投影噪波，而非真实的侧摆旋转。
+   - 新版采用 `pts[pip_idx] - pts[mcp_idx]`，直接描述**近端指骨的空间朝向**。当手指左右摆动时，PIP 点会绕 MCP 关节画弧，该向量的方向会发生显著变化——这才是真正的侧摆物理信号。
+
+2. **投影到掌面（解耦弯曲）**：
+   - `proj = v_finger - dot(v_finger, normal) * normal` 剔除垂直掌面的分量。
+   - 这使得弯曲（屈伸）动作不会污染侧摆计算：手指弯曲时，MCP→PIP 向量长度不变但方向在垂直方向变化；投影后该变化被移除，只剩水平方向的旋转分量。
+
+3. **使用 `atan2` 直接获得有符号角度**：
+   - 旧版用 `acos` 算无符号角 + `sign` 判方向，步骤繁琐。
+   - `atan2(dot(proj, perp), dot(proj, palm_axis))` 一步到位输出 **-180°~180°** 的带符号角度：正负号由 `perp` 方向自动决定，无需额外判向。
+   - `dot(proj, perp)` 是该指骨在掌宽方向的分量，`dot(proj, palm_axis)` 是掌长方向的分量——两者的比值正切值直接对应"偏离主轴的左右角度"。
+
+4. **零位校准 `per_finger_swing_offset`**：
+   - 每根手指的自然静息外展角不同（食指和中指天生有夹角，小指外展较大）。如果不做校准，即使手完全自然张开，各指侧摆输出也不为 0。
+   - `per_finger_swing_offset` 为每指提供一个可调的**减法偏移**：`swing = angle_deg - offset`。用户可在手保持自然张开时，将各指侧摆角度调至 0。
+   - 该参数由 GUI 的"侧摆零位校准"滑块控制，并持久化到 `calibration.json`。
+
+5. **±20° 硬件行程截断**：与拇指侧摆一致，保护灵巧手舵机。
+
+**与旧版算法的对比**：
+
+| 对比项 | 旧版（手腕→MCP） | 新版（MCP→PIP + 零位校准） |
+|--------|------------------|---------------------------|
+| 物理载体 | 掌骨基底方向（刚体，几乎不变） | 近端指骨方向（随侧摆旋转显著变化） |
+| 信号来源 | 掌形变化 + MediaPipe 像素抖动 | 指骨的真实左右旋转 |
+| 四指响应 | 微弱/抖动/几乎无响应 | 显著/稳定/有物理意义 |
+| 零位校准 | 无（各指自然外展角导致偏移） | 有（独立每指校准，可归零） |
 
 ### 16.4 拇指内外展（索引 15）—— 算法 v3（第 619–652 行）
 
@@ -1026,7 +1084,15 @@ def bgr2rgb(bgr: np.ndarray) -> np.ndarray:
 
 > 标定手感：先调 `offset` 让"完全并拢"时输出稳定在 0（或 110，取决于 reverse），再调 `gain` 让"完全外展"时输出恰好饱和到另一端，避免中段过于灵敏或迟钝。
 
-### 19.3 检测类（不参与角度公式）
+### 19.3 侧摆零位校准类（新增）
+
+| 参数 | 公式位置 | 改大的效果 | 何时调整 |
+|------|----------|-----------|----------|
+| `per_finger_swing_offset[finger]` | `swing = angle_deg - offset` | 将该手指的侧摆输出整体平移（负值→向右偏移，正值→向左偏移） | 手自然张开时，某指侧摆角度不为 0 |
+
+> 校准方法：手保持自然张开（不刻意侧摆），观察 GUI 上该指的侧摆角度值 \( \theta \)，将对应偏移设为 \( \theta \) 即可归零。
+
+### 19.4 检测类（不参与角度公式）
 
 | 参数 | 作用 |
 |------|------|
@@ -1097,7 +1163,13 @@ RuntimeError: 未找到手部模型文件 hand_landmarker.task。请下载并放
 
 不投影直接算 3D 夹角，会把"手指垂直掌面抬起"（这属于弯曲/整指抬起，不是侧摆）也混进侧摆角度。投影到掌面后只剩掌面内分量，侧摆与弯曲**正交解耦**：侧摆只看掌面内摆动，弯曲只看段间折角，两者互不污染。
 
-### Q7：`fist_confidence` 为 None 是什么情况？
+### Q7：四指侧摆改用 MCP→PIP 后，为什么感觉变化更明显了？
+
+因为物理载体变了：
+- 旧版（手腕→MCP）测量的是**掌骨基底的方向**，掌骨通过韧带刚性连接，几乎不产生相对运动，信号主要来自投影噪声。
+- 新版（MCP→PIP）测量的是**近端指骨的朝向**，指骨绕 MCP 关节旋转时，PIP 点画弧，该向量方向发生真实变化。这是侧摆真正的物理来源，因此响应更显著、更符合操作直觉。
+
+### Q8：`fist_confidence` 为 None 是什么情况？
 
 只有"深度图缺失"或"3D 坐标存在 NaN"两种可能（`_compute_fist_confidence` 第一行就返回 None）。`None` 语义是"无法用深度确认"，后处理会退回纯方向一致性判定（`postprocess.py` 里 `depth_confirms_fist = fist_confidence is not None and >= 0.6`，None 时该分支不生效）。
 
@@ -1110,9 +1182,9 @@ RuntimeError: 未找到手部模型文件 hand_landmarker.task。请下载并放
 | `camera/camera_module.py`、`lib/L515_driver.py` | 上游 | 提供 RGB（BGR）帧、深度图（毫米）、相机内参 `{fx, fy, ppx, ppy}` |
 | `vision/postprocess.py` | 下游 | 消费 `joint_angles_deg`（16 角）与 `fist_confidence`（握拳背书，≥0.6 跳过异常抑制） |
 | `hand/angles2motor.py`、`hand/hand_controller.py` | 下游 | 把 16 关节角度映射为 16 舵机角度并下发 |
-| `gui/main_gui.py` | 交互 | 通过 `update_params()` 热调参（滑块范围与本文参数对应，如内外展滑杆 `(0,110)`）；读取 `lateral_dist`、`fist_confidence` 做调试显示；`process()` 输出经 `postprocess.update()` 后再用 |
+| `gui/main_gui.py` | 交互 | 通过 `update_params()` 热调参（滑块范围与本文参数对应，如内外展滑杆 `(0,110)`、侧摆零位校准滑块）；读取 `lateral_dist`、`fist_confidence` 做调试显示；`process()` 输出经 `postprocess.update()` 后再用 |
 | `lib/vision_hand_ctrl.py` | 参考实现 | 旧版纯 2D 手控算法的参考（v3 注释里引用了它的"横向距离/拇指长度"归一化思路，但本文件改为"半掌宽标尺 + 软饱和 + 开关定方向"的稳定版本） |
 
 ---
 
-*文档结束。本文档覆盖 hand_pose.py 全部 769 行：常量定义、模块级函数、HandResult 数据结构、HandPoseEstimator 全生命周期（构造→检测→角度计算→绘制→释放），并对核心算法 `_landmarks_to_angles16`（含内外展 v3）做了逐公式推导。*
+*文档结束。本文档覆盖 hand_pose.py 全部 769 行：常量定义、模块级函数、HandResult 数据结构、HandPoseEstimator 全生命周期（构造→检测→角度计算→绘制→释放），并对核心算法 `_landmarks_to_angles16`（含内外展 v3、四指侧摆 MCP→PIP 重构）做了逐公式推导。*

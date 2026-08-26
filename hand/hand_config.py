@@ -55,7 +55,7 @@ HAND_CONFIG = {
     "position_max": POS_MAX,
     "k12": K12, "k3": K3, "k16": K16,
     "angle_range_deg": ANGLE_RANGE_DEG,
-    "default_speed": 1000,
+    "default_speed": 2000,
     "default_max_current": 75,
     "cmd_pos_vel_cur": 0xAA,
     "cmd_pos_vel":     0xA1,

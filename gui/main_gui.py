@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-main_gui.py —— 综合控制界面（视频区域固定 16:9，无黑边）
+main_gui.py —— 综合控制界面（移除距离比法，强制向量夹角法）
+
+设计原因：
+- 距离比法会耦合MCP和PIP，导致近端弯曲无法识别，因此彻底移除。
+- 所有弯曲角度现在均使用3D向量夹角法，与硬件舵机控制逻辑完全匹配。
 """
+
 from __future__ import annotations
 
 import json
@@ -77,44 +82,45 @@ PARAM_CONFIG = {
         "label": "平滑强度(1€)",
         "range": (0.1, 2.0, 0.05),
         "default": 0.5,
-        "desc": "One Euro 最小截止频率，越小越平滑"
+        "desc": "One Euro 最小截止频率"
     },
     "beta": {
         "label": "跟手度(1€)",
         "range": (0.0, 0.2, 0.005),
         "default": 0.02,
-        "desc": "速度自适应系数，越大越跟手"
+        "desc": "速度自适应系数"
     },
     "max_delta": {
         "label": "限速°/帧",
         "range": (1.0, 20.0, 0.5),
         "default": 8.0,
-        "desc": "每帧最大角度变化（防突跳）"
+        "desc": "每帧最大角度变化"
     },
     "thumb_abd_offset": {
         "label": "内外展死区",
         "range": (0.0, 0.5, 0.01),
         "default": 0.0,
-        "desc": "手掌宽度倍数，切除并拢时底部无效区间"
+        "desc": "手掌宽度倍数"
     },
     "thumb_abd_gain": {
         "label": "内外展增益",
         "range": (0.3, 2.0, 0.05),
         "default": 0.8,
-        "desc": "放大归一化横向距离（TIP/掌宽）"
+        "desc": "放大横向距离"
     },
     "abduct_max_delta": {
         "label": "内外展限速°/帧",
         "range": (0.5, 8.0, 0.5),
         "default": 2.0,
-        "desc": "内外展单帧最大变化（防跳变，越小越稳）"
+        "desc": "单帧最大变化"
     },
 }
 
+# ===== 强制移除“距离比法”复选框 =====
 CHECKBOX_CONFIG = {
     "bend_reverse": {"label": "弯曲反转", "default": False},
     "thumb_abd_reverse": {"label": "内外展反转", "default": False},
-    "use_dist_ratio": {"label": "距离比法", "default": False},
+    "swing_reverse": {"label": "侧摆反转", "default": False},
     "show_skeleton": {"label": "显示骨架", "default": True},
     "show_angles": {"label": "显示关节角", "default": True},
     "mimic_on": {"label": "动作模仿", "default": False},
@@ -151,21 +157,20 @@ class MainGui:
         self._stop_thread: threading.Thread | None = None
         self._after_id: str | None = None
 
-        self.angle_history = deque(maxlen=5)
+        self.angle_history = deque(maxlen=3)
 
-        # 精度后处理链（方向一致性异常检测 + 中值 + One Euro + 分通道限速）
         self.post = JointAnglePostProcess(
-            joint_num=JOINT_NUM, median_n=5,
+            joint_num=JOINT_NUM, median_n=3,
             min_cutoff=0.5, beta=0.02,
             max_delta_deg=8.0, abduct_max_delta_deg=3.0,
             max_jump_deg=40.0, jump_ratio_threshold=3.0,
         )
 
-        # 参数变量
         self.param_vars = {}
         self.checkbox_vars = {}
         self.finger_vars = {}
         self.finger_offset_vars = {}
+        self.swing_offset_vars = {}
 
         self._build_ui()
 
@@ -187,10 +192,10 @@ class MainGui:
         self.info_var = tk.StringVar(value="等待相机...")
 
         # ---- 布局 ----
-        self.root.grid_rowconfigure(0, weight=0)   # 顶部栏
-        self.root.grid_rowconfigure(1, weight=1)   # 中部
-        self.root.grid_rowconfigure(2, weight=0)   # 底部滑条
-        self.root.grid_rowconfigure(3, weight=0)   # 底部按钮
+        self.root.grid_rowconfigure(0, weight=0)
+        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_rowconfigure(2, weight=0)
+        self.root.grid_rowconfigure(3, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
 
         # ---- 顶部控制栏 ----
@@ -226,11 +231,10 @@ class MainGui:
         mid_frame = ttk.Frame(self.root)
         mid_frame.grid(row=1, column=0, sticky="nsew", padx=5, pady=2)
         mid_frame.grid_rowconfigure(0, weight=1)
-        # 视频区 58%，参数区 42%（参数全部显示，无需滚动，接近方形）
         mid_frame.grid_columnconfigure(0, weight=58)
         mid_frame.grid_columnconfigure(1, weight=42)
 
-        # ---- 左侧视频区域（自适应，保持原相机比例） ----
+        # ---- 左侧视频区域 ----
         left_frame = ttk.Frame(mid_frame)
         left_frame.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
@@ -249,20 +253,19 @@ class MainGui:
         ttk.Label(vid_frame, textvariable=self.state_var,
                   foreground="green").grid(row=2, column=0, sticky="w", padx=4)
 
-        # ---- 右侧参数面板（方形，全部显示，无需滚动） ----
+        # ---- 右侧参数面板 ----
         right_frame = ttk.Frame(mid_frame)
         right_frame.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
         right_frame.grid_rowconfigure(0, weight=1)
         right_frame.grid_columnconfigure(0, weight=1)
 
-        # 参数区做成两列（每列两个分组），全部内容一次显示
         param_canvas_frame = ttk.Frame(right_frame)
         param_canvas_frame.grid(row=0, column=0, sticky="nsew")
         param_canvas_frame.grid_rowconfigure(0, weight=1)
         param_canvas_frame.grid_columnconfigure(0, weight=1)
         param_canvas_frame.grid_columnconfigure(1, weight=1)
 
-        # 左列：全局校准 + 拇指内外展 + 控制开关
+        # 左列
         col_left = ttk.Frame(param_canvas_frame)
         col_left.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
 
@@ -290,7 +293,7 @@ class MainGui:
                                       command=self._apply_calib)
             chk.grid(row=idx//2, column=idx%2, sticky="w", padx=4, pady=1)
 
-        # 右列：每指增益 + 每指偏移 + 实时参数
+        # 右列
         col_right = ttk.Frame(param_canvas_frame)
         col_right.grid(row=0, column=1, sticky="nsew", padx=2, pady=2)
 
@@ -312,18 +315,27 @@ class MainGui:
             self.finger_offset_vars[name] = var
             self._add_slider(offset_frame, display, var, -30, 30, 1)
 
+        swing_frame = ttk.LabelFrame(col_right, text="侧摆零位校准")
+        swing_frame.pack(fill="x", padx=2, pady=2)
+        swing_keys = ["index", "middle", "ring", "pinky"]
+        swing_display = ["食指", "中指", "无名指", "小指"]
+        for key, display in zip(swing_keys, swing_display):
+            var = tk.DoubleVar(value=0.0)
+            self.swing_offset_vars[key] = var
+            self._add_slider(swing_frame, display, var, -30, 30, 0.5)
+
         disp_frame = ttk.LabelFrame(col_right, text="实时参数")
         disp_frame.pack(fill="both", expand=True, padx=2, pady=2)
         ttk.Label(disp_frame, textvariable=self.info_var, justify="left",
                   font=("Consolas", 8)).pack(anchor="w", padx=4, fill="both", expand=True)
 
-        # ---- 底部：关节滑条（长方形布局：16 列 × 2 行，横向长条） ----
+        # ---- 底部滑条 ----
         bot_frame = ttk.LabelFrame(self.root, text="16 关节手动控制（长方形布局）")
         bot_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=2)
 
         self.angle_vars = []
         self.sliders = []
-        cols = 8                      # 8 列 × 2 行 = 长方形（更宽更扁）
+        cols = 8
         slider_len = 120
         for i in range(JOINT_NUM):
             row = (i // cols) * 2
@@ -340,7 +352,6 @@ class MainGui:
                          command=lambda _v, idx=i: self._slider_changed(idx))
             s.pack(fill="x")
             self.sliders.append(s)
-        # 平均分配 8 列宽度（撑满横向）
         for c in range(cols):
             bot_frame.grid_columnconfigure(c, weight=1)
 
@@ -359,8 +370,8 @@ class MainGui:
         ttk.Spinbox(btns, from_=0, to=4095, textvariable=self.motor_pos, width=5).pack(side="left")
         ttk.Button(btns, text="测试", command=self._test_motor).pack(side="left", padx=4)
 
+    # 辅助UI方法
     def _add_slider(self, parent, label, var, from_, to, resolution):
-        """添加单个滑条行（紧凑，适合方形面板全部显示）"""
         f = ttk.Frame(parent)
         f.pack(fill="x", padx=2, pady=0)
         ttk.Label(f, text=label, width=12, font=("", 8), anchor="w").pack(side="left")
@@ -370,16 +381,13 @@ class MainGui:
         ttk.Label(f, textvariable=var, width=5, font=("", 8), anchor="e").pack(side="left")
 
     def _add_param_group(self, parent, keys):
-        """添加参数组（每个参数一个滑条）"""
         for key in keys:
             cfg = PARAM_CONFIG[key]
             var = tk.DoubleVar(value=cfg["default"])
             self.param_vars[key] = var
             self._add_slider(parent, cfg["label"], var, cfg["range"][0], cfg["range"][1], cfg["range"][2])
 
-    # ==================================================================
     # 配置持久化
-    # ==================================================================
     def _load_calibration(self):
         if not os.path.exists(self.config_path):
             return
@@ -400,6 +408,10 @@ class MainGui:
                 for name, val in data["per_finger_offset"].items():
                     if name in self.finger_offset_vars:
                         self.finger_offset_vars[name].set(val)
+            if "per_finger_swing_offset" in data:
+                for name, val in data["per_finger_swing_offset"].items():
+                    if name in self.swing_offset_vars:
+                        self.swing_offset_vars[name].set(val)
             logger.info("校准配置已加载")
         except Exception as e:
             logger.warning("加载校准配置失败: %s", e)
@@ -412,15 +424,14 @@ class MainGui:
             data[key] = var.get()
         data["per_finger_scale"] = {name: var.get() for name, var in self.finger_vars.items()}
         data["per_finger_offset"] = {name: var.get() for name, var in self.finger_offset_vars.items()}
+        data["per_finger_swing_offset"] = {name: var.get() for name, var in self.swing_offset_vars.items()}
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.warning("保存校准配置失败: %s", e)
 
-    # ==================================================================
-    # 相机
-    # ==================================================================
+    # 相机控制
     def _start_camera(self):
         if self.cam is not None:
             self._stop_camera()
@@ -431,12 +442,13 @@ class MainGui:
                 width=1280 if use_rs else 640,
                 height=720 if use_rs else 480,
                 depth_width=1024, depth_height=768)
+            # 不再传递 use_distance_ratio
             self.est = HandPoseEstimator(
                 max_hands=1,
-                use_distance_ratio=self.checkbox_vars["use_dist_ratio"].get(),
                 thumb_abd_offset=self.param_vars["thumb_abd_offset"].get(),
                 thumb_abd_gain=self.param_vars["thumb_abd_gain"].get(),
                 thumb_abd_reverse=self.checkbox_vars["thumb_abd_reverse"].get(),
+                swing_reverse=self.checkbox_vars["swing_reverse"].get(),
             )
             self._apply_calib()
             self._running = True
@@ -452,23 +464,19 @@ class MainGui:
     def _stop_camera(self):
         logger.info(">>> _stop_camera 开始")
         self._running = False
-
         if hasattr(self, '_after_id') and self._after_id is not None:
             try:
                 self.root.after_cancel(self._after_id)
                 self._after_id = None
             except Exception:
                 pass
-
         if hasattr(self, '_capture_thread') and self._capture_thread and self._capture_thread.is_alive():
             self._capture_thread.join(timeout=0.5)
-
         while not self.frame_q.empty():
             try:
                 self.frame_q.get_nowait()
             except queue.Empty:
                 break
-
         cam_to_release = self.cam
         est_to_close = self.est
         self.cam = None
@@ -514,14 +522,16 @@ class MainGui:
     def _poll_video(self):
         if not self._running:
             return
-
         try:
             rgb, depth = self.frame_q.get_nowait()
         except queue.Empty:
             if self._running:
-                self._after_id = self.root.after(30, self._poll_video)
+                if not self.frame_q.empty():
+                    delay = 5
+                else:
+                    delay = 20
+                self._after_id = self.root.after(delay, self._poll_video)
             return
-
         if not self._running:
             return
 
@@ -554,8 +564,8 @@ class MainGui:
             try:
                 r = results[0]
                 angles_deg = r.joint_angles_deg
-                norm_dist = getattr(r, "lateral_dist", None)   # 横向距离（原代码误用 norm_dist）
-                fist_conf = getattr(r, "fist_confidence", None)  # 深度辅助握拳置信度
+                norm_dist = getattr(r, "lateral_dist", None)
+                fist_conf = getattr(r, "fist_confidence", None)
                 if self.checkbox_vars["show_angles"].get():
                     y = 20
                     for i in range(JOINT_NUM):
@@ -571,7 +581,7 @@ class MainGui:
             except Exception as e:
                 logger.warning("动作模仿异常: %s", e)
 
-        # ---- 信息展示 ----
+        # 信息展示
         info = "未识别到手"
         if results and angles_deg is not None:
             r = results[0]
@@ -589,7 +599,6 @@ class MainGui:
             if fist_conf is not None:
                 lines.append(f"握拳置信(深度): {fist_conf:.2f}")
             angle_str = "\n".join(lines)
-            # 稳定性指标（后处理）
             if hasattr(self, "post"):
                 st = self.post.get_stats()
                 angle_str += (f"\n稳定性: 抖动std={st['jitter_std_deg']:.2f}° "
@@ -598,35 +607,26 @@ class MainGui:
                     f"关节角:\n{angle_str}")
         self.info_var.set(info)
 
-        # ---- 显示画面：保持原相机宽高比，等比缩放后居中（无变形、无黑边） ----
+        # 显示画面
         try:
             canvas_w = self.video_canvas.winfo_width()
             canvas_h = self.video_canvas.winfo_height()
             if canvas_w < 2 or canvas_h < 2:
                 canvas_w, canvas_h = 800, 600
-
             src_h, src_w = disp.shape[:2]
-            src_ratio = src_w / src_h          # 原相机宽高比
-
-            # 以"填满"为原则等比缩放：scale = max(cw/sw, ch/sh)，
-            # 缩放后裁掉超出 Canvas 的部分（保持比例 -> 无黑边、无变形）。
+            src_ratio = src_w / src_h
             scale = max(canvas_w / src_w, canvas_h / src_h)
             new_w = max(1, int(round(src_w * scale)))
             new_h = max(1, int(round(src_h * scale)))
             resized = cv2.resize(disp, (new_w, new_h))
-
-            # 居中裁剪到 Canvas 尺寸
             x0 = max(0, (new_w - canvas_w) // 2)
             y0 = max(0, (new_h - canvas_h) // 2)
             crop = resized[y0:y0 + canvas_h, x0:x0 + canvas_w]
-
             resized_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
             img = ImageTk.PhotoImage(Image.fromarray(resized_rgb))
             self.video_canvas.delete("all")
             self.video_canvas.create_image(0, 0, anchor="nw", image=img)
             self.video_canvas.image = img
-
-            # 显示相机比例信息（帮助理解"高度长度"）
             self.video_info_var.set(
                 f"相机 {src_w}x{src_h} (比例 {src_ratio:.3f}) | "
                 f"显示 {canvas_w}x{canvas_h} | 缩放 {scale:.2f}x"
@@ -639,9 +639,7 @@ class MainGui:
         else:
             logger.info(">>> _poll_video 不再调度")
 
-    # ==================================================================
     # 校准应用
-    # ==================================================================
     def _apply_calib(self):
         if self.est is None:
             return
@@ -651,14 +649,14 @@ class MainGui:
             bend_offset=self.param_vars["bend_offset"].get(),
             deadzone_deg=self.param_vars["deadzone"].get(),
             bend_reverse=self.checkbox_vars["bend_reverse"].get(),
-            use_distance_ratio=self.checkbox_vars["use_dist_ratio"].get(),
             per_finger_scale={name: var.get() for name, var in self.finger_vars.items()},
             per_finger_offset={name: var.get() for name, var in self.finger_offset_vars.items()},
+            per_finger_swing_offset={name: var.get() for name, var in self.swing_offset_vars.items()},
             thumb_abd_offset=self.param_vars["thumb_abd_offset"].get(),
             thumb_abd_gain=self.param_vars["thumb_abd_gain"].get(),
             thumb_abd_reverse=self.checkbox_vars["thumb_abd_reverse"].get(),
+            swing_reverse=self.checkbox_vars["swing_reverse"].get(),
         )
-        # 同步后处理参数
         if hasattr(self, "post"):
             self.post.update_params(
                 min_cutoff=self.param_vars["min_cutoff"].get(),
@@ -668,9 +666,7 @@ class MainGui:
             )
         self._save_calibration()
 
-    # ==================================================================
-    # 灵巧手控制
-    # ==================================================================
+    # 手控制
     def _connect_hand(self):
         try:
             if self.hand is not None:
@@ -782,9 +778,7 @@ class MainGui:
 
     def _mimic_apply(self, angles_deg: List[float],
                      fist_confidence: float | None = None):
-        """精度后处理链：均值 → deadzone → 异常检测(方向一致性+深度)/中值/One Euro/分通道限速 → 下发。"""
         deadzone_deg = self.param_vars["deadzone"].get()
-        # 多帧均值（去单帧毛刺，配合 post 内部中值）
         self.angle_history.append(angles_deg.copy())
         if len(self.angle_history) >= 3:
             avg_deg = [0.0] * JOINT_NUM
@@ -794,14 +788,11 @@ class MainGui:
         else:
             avg_deg = angles_deg
 
-        # deadzone（静态小角度归零，防微颤）
         for i in range(JOINT_NUM):
             if abs(avg_deg[i]) < deadzone_deg:
                 avg_deg[i] = 0.0
 
-        # 核心：方向一致性+深度辅助异常检测 → 中值 → One Euro → 分通道限速
         out_deg = self.post.update(avg_deg, fist_confidence=fist_confidence)
-
         angles_rad = [math.radians(v) for v in out_deg]
         try:
             self.hand.move_joints(angles_rad)

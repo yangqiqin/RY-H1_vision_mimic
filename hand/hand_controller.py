@@ -430,7 +430,7 @@ class RYH1HandController:
                     max_current: Optional[int] = None,
                     hand_lr: Optional[int] = None,
                     control_mode: int = 0,
-                    inter_sleep_s: float = 0.0005) -> List[int]:
+                    inter_sleep_s: float = 0.0001) -> List[int]:
         """16 关节弧度 -> 电机指令 -> 逐电机下发（0xAA 力位混合 / 0xA1 速度）。"""
         if len(angles_rad_16) != JOINT_NUM:
             raise ValueError(f"需要恰好 {JOINT_NUM} 个关节角度")
