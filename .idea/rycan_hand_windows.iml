@@ -10,6 +10,7 @@
       <sourceFolder url="file://$MODULE_DIR$/vision" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/lib" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/config" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/arm" isTestSource="false" />
     </content>
     <orderEntry type="jdk" jdkName="E:\pythonProject\python3.10.11\python.exe" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

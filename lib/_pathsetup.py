@@ -50,6 +50,11 @@ def project_root(anchor: Optional[str] = None) -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _lib_dir() -> str:
+    """lib/ 目录（本文件所在目录）。"""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def ensure_root(anchor: Optional[str] = None) -> str:
     """把项目根目录加入 sys.path 并切换到该目录。返回根目录绝对路径。
 
@@ -66,10 +71,29 @@ def ensure_root(anchor: Optional[str] = None) -> str:
     return root
 
 
+def ensure_ref_code() -> str:
+    """把 lib/参考代码/ 加入 sys.path，使该目录下的参考实现可导入。
+
+    背景：camera_lib1.py / L515_driver.py / vision_hand_ctrl.py 等参考代码
+    已被用户统一移到 lib/参考代码/ 子目录（不再放 lib/ 根目录）。
+    但 gui/main_gui.py 仍使用 `from lib.camera_lib1 import CameraModule`：
+      * lib/camera_lib1.py 是"转发模块"（见该文件），它执行
+        `from 参考代码.camera_lib1 import *`；
+      * 本函数保证 参考代码/ 在 sys.path 中，转发才能成功。
+
+    返回 参考代码/ 目录绝对路径（不存在时返回空串）。
+    """
+    ref = os.path.join(_lib_dir(), "参考代码")
+    ref = os.path.abspath(ref)
+    if os.path.isdir(ref) and ref not in sys.path:
+        sys.path.insert(0, ref)
+    return ref if os.path.isdir(ref) else ""
+
+
 def root_candidates() -> list:
     """返回应搜索 DLL/驱动文件的目录候选列表（根目录优先）。"""
     roots = [os.getcwd()]
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = _lib_dir()
     if here not in roots:
         roots.append(here)
     return roots

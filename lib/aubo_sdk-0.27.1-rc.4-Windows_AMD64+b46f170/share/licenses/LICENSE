@@ -1,0 +1,12 @@
+AUBO SDK is distributed under a proprietary license.
+
+Primary license texts:
+- English: licenses/AUBO_SDK_LICENSE.en.md
+- Simplified Chinese: licenses/AUBO_SDK_LICENSE.zh-CN.md
+
+Dual-license choice (choose one of the two for covered components):
+- Notice: licenses/README.md
+- BSD 2-Clause notice: licenses/AUBO_SDK_BSD_2_CLAUSE_LICENSE_NOTICE.en.md / .zh-CN.md
+
+Third-party dependency license notices:
+- licenses/third_party/

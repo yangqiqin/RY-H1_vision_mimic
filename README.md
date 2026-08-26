@@ -1,25 +1,28 @@
-# 睿研 RY-H1(16) 灵巧手 · Windows 视觉动作模仿（不接机械臂，模块化可单项验证）
+# 睿研 RY-H1(16) 灵巧手 + Aubo K5 机械臂 · Windows 视觉动作模仿（模块化可单项验证）
 
-> **依据**：《睿研灵巧的SDK入门指南》V1.01（知识库）、官方 demo（`RyHandLibCANII_rs485_pcan_16.py`、`RyHandLibPCAN_windows16.cpp`、`RyHandLib.h`）、RY-H1(16) 手册。
+> **依据**：《睿研灵巧的SDK入门指南》V1.01（知识库）、官方 demo（`RyHandLibCANII_rs485_pcan_16.py`、`RyHandLibPCAN_windows16.cpp`、`RyHandLib.h`）、RY-H1(16) 手册、
+> 遨博官方文档（`lib/auboDocument/`）+ SDK Python 示例（`lib/aubo_sdk-0.27.1-rc.4-Windows_AMD64+b46f170/share/example/python/`）。
 >
-> **目标**：Windows 上 **只通过摄像头 + 灵巧手** 实现视觉动作模仿，无需机械臂、无需 Ubuntu。每个模块可**单独验证**，另有综合验证脚本一次跑通。
+> **目标**：Windows 上 **L515 采集 → MediaPipe Holistic 全身姿态 → 灵巧手 + 机械臂协同控制**。
+> 灵巧手 / 机械臂 / Holistic 各自**单独可验证**，也可通过协同 GUI **结合运行**：
+> 人体手臂 → 机械臂（人动臂动）、手部手势 → 灵巧手（手动手指）。
 >
-> **📚 代码详解**：每个源码文件的逐函数中文注释见 [`docs/代码详解/`](docs/代码详解/README.md)（架构总览 + 10 个文件独立详解）。
+> **📚 代码详解**：每个源码文件的逐函数中文注释见 [`docs/代码详解/`](docs/代码详解/README.md)（架构总览 + 各文件独立详解）。
+> **📖 机械臂执行文档**：见 [`docs/机械臂控制执行文档.md`](docs/机械臂控制执行文档.md)（环境/连接/验证/GUI/联动/排障）。
+> **📖 协同控制文档**：见 [`docs/协同控制说明文档.md`](docs/协同控制说明文档.md)（Holistic 协同：映射逻辑/标定/使用）。
+> **📖 总纲**：见 [`docs/设备连接与成功运行总纲.md`](docs/设备连接与成功运行总纲.md)（连接/运行/逻辑/术语/注意）。
 
 ```
-USB摄像头 / Intel L515 ──▶ lib/camera_lib1 ──▶ vision/hand_pose (MediaPipe 16关节角 + 深度握拳置信度)
-                                                    │
-                                                    ▼
-                            vision/postprocess (方向一致性异常检测 + 中值 + OneEuro + 分通道限速)
-                                                    │
-                                                    ▼
-                            hand/angles2motor (16关节弧度→电机指令)
-                                                    │
-                                                    ▼
-                            hand/hand_controller (RyhandLibx64.dll + PCAN/CANII/RS485)
-                                                    │
-                                                    ▼
-                                            RY-H1(16) 灵巧手
+L515（RGB+深度）──▶ vision/holistic_pose（MediaPipe Holistic 全身：人体33点 + 双手21点）★新增
+                        ├───────────────┬──────────────────────────────┐
+                        ▼               ▼                              ▼
+               人体腕部 3D          手部 21 点                     16 关节角
+                        │               │                              │
+                        ▼               ▼                              ▼
+        arm/arm_follow（映射TCP）  hand_pose 解算链（复用）      postprocess 平滑
+        → 机械臂 movel 跟随       → 灵巧手 move_joints         → 灵巧手（手跟随）
+                        │                                              │
+                        └────────────── TCP 坐标联动（灵巧手装末端）──────┘
 ```
 
 ---
@@ -28,13 +31,17 @@ USB摄像头 / Intel L515 ──▶ lib/camera_lib1 ──▶ vision/hand_pose (
 
 | 模块 | 文件 | 单项验证 | 说明 |
 |---|---|---|---|
-| 摄像头 | `lib/camera_lib1.py`（GUI 实际用）/ `camera/camera_module.py` | `apps/test_camera.py` | USB UVC / **L515 RGB-D**（含连通性检查、帧时间戳、landmarks_to_3d） |
+| 摄像头 | `lib/camera_lib1.py`（GUI 实际用，转发 `lib/参考代码/camera_lib1.py`）/ `camera/camera_module.py` | `apps/test_camera.py` | USB UVC / **L515 RGB-D**（含连通性检查、帧时间戳、landmarks_to_3d） |
 | 姿态估计 | `vision/hand_pose.py` | `test_all.py` 第 3 步 | MediaPipe → 16 关节弧度 + 深度握拳置信度 |
 | 关节换算 | `hand/angles2motor.py` | `test_all.py` 第 4 步 | demo 公式 + 左右手 |
 | 精度后处理 | `vision/postprocess.py` | `python vision/postprocess.py`（自测） | 方向一致性异常检测 + 中值 + OneEuro + 分通道限速 |
 | **灵巧手控制** | `hand/hand_controller.py` | **`apps/test_hand.py`** | 连接性自检 + 状态读取 + 动作 + 回零/行程 |
 | 通信层 | `hand/transport.py` | （被控制器调用） | PCAN / CANalyst-II / RS485 |
-| **GUI 主界面** | **`gui/main_gui.py`** | `python -m gui.main_gui` | 实时画面 + 骨架/关节角 + 校准滑条 + 动作模仿 + 手控 |
+| **机械臂控制** | **`arm/arm_controller.py`** + `arm/arm_config.py` + `arm/arm_follow.py` | **`apps/test_arm.py`** / `apps/diag_arm.py` | Aubo K5（pyaubo_sdk RPC）：连接/上电/运动/状态/IO/示教/正逆解 + 腕部→TCP 映射 |
+| **协同控制(Holistic)** | **`vision/holistic_pose.py`** | **`apps/test_holistic.py`** | MediaPipe Holistic 全身：人体33点→机械臂、手部21点→16关节角 |
+| **GUI 主界面（灵巧手）** | **`gui/main_gui.py`** | `python -m gui.main_gui` | 实时画面 + 骨架/关节角 + 校准滑条 + 动作模仿 + 手控 |
+| **GUI 主界面（臂+手）** | **`gui/main_gui_arm.py`** | `python -m gui.main_gui_arm` | 原灵巧手全部功能 + 机械臂面板 + TCP 联动/臂手联动 |
+| **GUI 协同总界面** | **`gui/main_gui_holistic.py`** | `python -m gui.main_gui_holistic` | 灵巧手 + 机械臂 + Holistic 协同（人体→臂、手→灵巧手） |
 | GUI 简版 | `gui/hand_gui.py` | `python -m gui.hand_gui` | 连接测试 + 16 关节滑条 + 预设动作 |
 | 动作模仿 | `apps/mimic_demo.py` | 直接运行 | 摄像头 → 姿态 → 灵巧手 |
 | **综合验证** | **`apps/test_all.py`** | 直接运行 | 依赖+摄像头+姿态+换算+灵巧手一次跑通 |
@@ -136,8 +143,14 @@ python apps/test_camera.py --realsense --show
 # ④ 简单 GUI 控制面板（连接测试 + 滑条 + 预设动作）
 python -m gui.hand_gui
 
-# ⑤ ★ 综合控制界面（推荐：实时画面 + 骨架 + 校准 + 手控）
+# ⑤ ★ 综合控制界面（灵巧手：实时画面 + 骨架 + 校准 + 手控）
 python -m gui.main_gui
+
+# ⑤b ★ 综合控制界面（臂+手：原灵巧手功能 + Aubo K5 机械臂 + TCP 联动）
+python -m gui.main_gui_arm
+
+# ⑤c ★ 协同总控制界面（灵巧手 + 机械臂 + Holistic 全身协同：人体→臂、手→灵巧手）
+python -m gui.main_gui_holistic
 
 # ⑥ 动作模仿（命令行版）
 python apps/mimic_demo.py --method pcan --camera 0 --scale 0.5
@@ -146,6 +159,16 @@ python apps/mimic_demo.py --method pcan --realsense --scale 0.5 --show
 # ⑦ 综合验证（依赖+摄像头+姿态+换算+灵巧手 一次跑通）
 python apps/test_all.py --method pcan
 python apps/test_all.py --method pcan --move
+
+# ⑧ 机械臂（Aubo K5，详见 docs/机械臂控制执行文档.md）
+python apps/test_arm.py --ip 192.168.1.200                # 连接 + 读状态
+python apps/test_arm.py --ip 192.168.1.200 --startup --move   # 上电 + 安全运动
+python apps/diag_arm.py --ip 192.168.1.200 --poweron --fk --ik   # 深度诊断
+
+# ⑨ Holistic 协同（详见 docs/协同控制说明文档.md）
+python apps/test_holistic.py --selfcheck                  # 模型+映射自检（无硬件）
+python apps/test_holistic.py --realsense --show           # L515 实时检测（人体+手）
+python arm/arm_follow.py                                  # 腕部→TCP 映射单元自测
 ```
 
 ### 综合控制界面 `gui/main_gui.py` 使用步骤（推荐主入口）
@@ -309,8 +332,11 @@ except Exception:
 
 | 文档 | 内容 |
 |---|---|
+| [`docs/设备连接与成功运行总纲.md`](docs/设备连接与成功运行总纲.md) | **总纲**：器件连接/成功运行/运行逻辑/代码解释/术语表/全部注意事项（综合知识库手册+代码提炼） |
+| [`docs/协同控制说明文档.md`](docs/协同控制说明文档.md) | **Holistic 协同**：L515→全身姿态→灵巧手+机械臂的映射逻辑/标定流程/使用/安全 |
+| [`docs/机械臂控制执行文档.md`](docs/机械臂控制执行文档.md) | **Aubo K5 机械臂**：环境/连接/单项验证/扩展 GUI/TCP 联动/安全/排障 |
 | [`docs/代码详解/00_总览详解.md`](docs/代码详解/00_总览详解.md) | 系统架构、数据流、16 关节控制模型、模块依赖、校准参数全景、常见问题速查 |
-| [`docs/代码详解/01~10_*.md`](docs/代码详解/README.md) | 每个核心源码文件的逐函数中文注释（配置/换算/控制器/传输/相机/姿态/后处理/GUI/路径） |
+| [`docs/代码详解/01~13_*.md`](docs/代码详解/README.md) | 每个核心源码文件的逐函数中文注释（配置/换算/控制器/传输/相机/姿态/后处理/GUI/路径/机械臂） |
 | [`修改记录文档.md`](修改记录文档.md) | 按时间顺序的每次修改：现象/根因/改法/验证 |
 | [`错误排查手册.md`](错误排查手册.md) | 按"现象→原因→处理"组织的完整排障手册 |
 | [`控制精度提升方案.md`](控制精度提升方案.md) | 精度提升的理论依据（4 篇论文）+ 分阶段实施方案与调参流程 |
