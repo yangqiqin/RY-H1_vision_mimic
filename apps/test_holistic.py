@@ -107,11 +107,10 @@ def main():
                 return
             run_on_frame(est, follower, img, show=args.show)
         else:
+            from camera import CameraModule  # 与 test_camera.py 同源（camera 包），已验证可连 L515
             if args.realsense:
-                from lib.camera_lib1 import CameraModule
                 cam = CameraModule(use_realsense=True)
             else:
-                from lib.camera_lib1 import CameraModule
                 cam = CameraModule(source=args.camera or 0)
             intrinsics = cam.get_intrinsics()
             print("\n实时检测中（ESC 退出）...")

@@ -186,13 +186,18 @@ class HolisticPoseEstimator:
         self.hand_side = hand_side.lower()
         self.use_hand_pose = use_hand_pose
 
-        # 创建 HolisticLandmarker（Tasks API）
+        # ========== 修改点：降低置信度阈值，提高检出率 ==========
+        # 原始代码只有 base_options 和 running_mode，默认阈值 0.5
+        # 添加 min_pose_detection_confidence 和 min_hand_landmarks_confidence 至 0.3
         base_options = mp_python.BaseOptions(model_asset_path=model_file)
         options = mp_vision.HolisticLandmarkerOptions(
             base_options=base_options,
             running_mode=mp_vision.RunningMode.IMAGE,
+            min_pose_detection_confidence=0.3,      # 降低人体检测阈值
+            min_hand_landmarks_confidence=0.3,      # 降低手部检测阈值
         )
         self._landmarker = mp_vision.HolisticLandmarker.create_from_options(options)
+        logger.info("[Holistic] 模型加载成功，置信度阈值已设为 0.3")
 
         # 组合 HandPoseEstimator 复用角度解算（懒创建，避免加载手部模型）
         self._hand_engine = None
@@ -229,12 +234,12 @@ class HolisticPoseEstimator:
 
     # ------------------------------------------------------------------
     def process(
-        self,
-        rgb_bgr: np.ndarray,
-        depth: Optional[np.ndarray] = None,
-        intrinsics: Optional[dict] = None,
-        map_to_arm: bool = False,
-        arm_mapper=None,
+            self,
+            rgb_bgr: np.ndarray,
+            depth: Optional[np.ndarray] = None,
+            intrinsics: Optional[dict] = None,
+            map_to_arm: bool = False,
+            arm_mapper=None,
     ) -> List[HolisticResult]:
         """
         处理一帧：检测人体 + 双手，解算手部 16 关节角，可选映射机械臂 TCP。
@@ -248,25 +253,42 @@ class HolisticPoseEstimator:
         """
         if rgb_bgr is None:
             return []
+
+        # ===== 诊断：打印图像信息 =====
+        logger.info(f"[Holistic] 输入图像: shape={rgb_bgr.shape}, dtype={rgb_bgr.dtype}")
+        h, w = rgb_bgr.shape[:2]
+        if h < 200 or w < 200:
+            logger.warning(f"[Holistic] 图像尺寸过小 ({w}x{h})，建议 >=480x480")
+
         rgb = bgr2rgb(rgb_bgr)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB,
                             data=np.ascontiguousarray(rgb))
-        res = self._landmarker.detect(mp_image)
+
+        try:
+            res = self._landmarker.detect(mp_image)
+        except Exception as e:
+            logger.error(f"[Holistic] detect() 异常: {e}")
+            return []
+
+        # ===== 诊断：检测结果标志 =====
+        has_pose = res.pose_landmarks is not None
+        has_left = res.left_hand_landmarks is not None
+        has_right = res.right_hand_landmarks is not None
+        logger.info(f"[Holistic] 检测结果: pose={has_pose}, left={has_left}, right={has_right}")
 
         out: List[HolisticResult] = []
-        # holistic 最多检测一个人体；构造单结果
         r = HolisticResult()
-        if not res.pose_landmarks and not (res.left_hand_landmarks or res.right_hand_landmarks):
+        if not has_pose and not (has_left or has_right):
+            logger.warning("[Holistic] 未检测到任何关键点！请检查：光照、距离、是否全身入镜")
             return out
 
-        # ---- 1. 人体关键点 ----
+        # ---- 以下为原处理逻辑（完全不变） ----
         if res.pose_landmarks:
             pts_norm = np.array([(p.x, p.y, p.z) for p in res.pose_landmarks],
                                 dtype=np.float64)
             r.pose_landmarks = pts_norm
             r.pose_3d = self._pose_to_3d(pts_norm, depth, intrinsics)
 
-        # ---- 2. 手部关键点（选一只手控制灵巧手） ----
         hand_pts_norm = None
         side = "none"
         if self.hand_side == "left" and res.left_hand_landmarks:
@@ -277,7 +299,7 @@ class HolisticPoseEstimator:
             hand_pts_norm = np.array([(p.x, p.y, p.z) for p in res.right_hand_landmarks],
                                      dtype=np.float64)
             side = "right"
-        elif res.right_hand_landmarks:  # 兜底：默认优先右手
+        elif res.right_hand_landmarks:
             hand_pts_norm = np.array([(p.x, p.y, p.z) for p in res.right_hand_landmarks],
                                      dtype=np.float64)
             side = "right"
@@ -292,9 +314,7 @@ class HolisticPoseEstimator:
             r.hand_fist_confidence = self._hand_engine._compute_fist_confidence(
                 hand_pts_norm, real_pts)
 
-        # ---- 3. 腕部 3D（机械臂映射用） ----
         wrist_pose_idx = POSE_RIGHT_WRIST if side == "right" else POSE_LEFT_WRIST
-        # 优先用所选手的腕部（pose 15/16），若人体未检测到则回退手部 WRIST
         if r.pose_3d is not None and wrist_pose_idx < len(r.pose_3d):
             w3d = r.pose_3d[wrist_pose_idx]
             if np.all(np.isfinite(w3d)):
@@ -307,7 +327,6 @@ class HolisticPoseEstimator:
                 r.wrist_3d = [float(v) for v in real_pts[WRIST]]
                 r.wrist_side = side
 
-        # ---- 4. 机械臂 TCP 映射 ----
         if map_to_arm and arm_mapper is not None and r.wrist_3d is not None:
             try:
                 r.arm_target_pose = arm_mapper(r.wrist_3d)

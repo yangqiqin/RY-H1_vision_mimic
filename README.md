@@ -10,6 +10,7 @@
 > **📚 代码详解**：每个源码文件的逐函数中文注释见 [`docs/代码详解/`](docs/代码详解/README.md)（架构总览 + 各文件独立详解）。
 > **📖 机械臂执行文档**：见 [`docs/机械臂控制执行文档.md`](docs/机械臂控制执行文档.md)（环境/连接/验证/GUI/联动/排障）。
 > **📖 协同控制文档**：见 [`docs/协同控制说明文档.md`](docs/协同控制说明文档.md)（Holistic 协同：映射逻辑/标定/使用）。
+> **📖 眼在手上文档**：见 [`docs/眼在手上协同控制文档.md`](docs/眼在手上协同控制文档.md)（手眼标定/安全框/跟随/急停）。
 > **📖 总纲**：见 [`docs/设备连接与成功运行总纲.md`](docs/设备连接与成功运行总纲.md)（连接/运行/逻辑/术语/注意）。
 
 ```
@@ -152,6 +153,9 @@ python -m gui.main_gui_arm
 # ⑤c ★ 协同总控制界面（灵巧手 + 机械臂 + Holistic 全身协同：人体→臂、手→灵巧手）
 python -m gui.main_gui_holistic
 
+# ⑤d ★ 眼在手上总控制界面（手眼标定 + 安全框 + 增量跟随 + 失手急停，见 docs/眼在手上协同控制文档.md）
+python -m gui.main_gui_eye
+
 # ⑥ 动作模仿（命令行版）
 python apps/mimic_demo.py --method pcan --camera 0 --scale 0.5
 python apps/mimic_demo.py --method pcan --realsense --scale 0.5 --show
@@ -161,9 +165,9 @@ python apps/test_all.py --method pcan
 python apps/test_all.py --method pcan --move
 
 # ⑧ 机械臂（Aubo K5，详见 docs/机械臂控制执行文档.md）
-python apps/test_arm.py --ip 192.168.1.200                # 连接 + 读状态
-python apps/test_arm.py --ip 192.168.1.200 --startup --move   # 上电 + 安全运动
-python apps/diag_arm.py --ip 192.168.1.200 --poweron --fk --ik   # 深度诊断
+python apps/test_arm.py --ip 192.168.1.100                # 连接 + 读状态
+python apps/test_arm.py --ip 192.168.1.100 --startup --move   # 上电 + 安全运动
+python apps/diag_arm.py --ip 192.168.1.100 --poweron --fk --ik   # 深度诊断
 
 # ⑨ Holistic 协同（详见 docs/协同控制说明文档.md）
 python apps/test_holistic.py --selfcheck                  # 模型+映射自检（无硬件）
@@ -333,6 +337,7 @@ except Exception:
 | 文档 | 内容 |
 |---|---|
 | [`docs/设备连接与成功运行总纲.md`](docs/设备连接与成功运行总纲.md) | **总纲**：器件连接/成功运行/运行逻辑/代码解释/术语表/全部注意事项（综合知识库手册+代码提炼） |
+| [`docs/眼在手上协同控制文档.md`](docs/眼在手上协同控制文档.md) | **眼在手上**：手眼标定/安全框/增量跟随/失手急停/模块作用/数据需求/操作/名词/安全 |
 | [`docs/协同控制说明文档.md`](docs/协同控制说明文档.md) | **Holistic 协同**：L515→全身姿态→灵巧手+机械臂的映射逻辑/标定流程/使用/安全 |
 | [`docs/机械臂控制执行文档.md`](docs/机械臂控制执行文档.md) | **Aubo K5 机械臂**：环境/连接/单项验证/扩展 GUI/TCP 联动/安全/排障 |
 | [`docs/代码详解/00_总览详解.md`](docs/代码详解/00_总览详解.md) | 系统架构、数据流、16 关节控制模型、模块依赖、校准参数全景、常见问题速查 |

@@ -371,6 +371,15 @@ class RYH1HandController:
             self._ticks.value = int(time.time() * 1000) % 1000
 
     # ------------------------------------------------------------------
+    def version(self) -> str:
+        """读取 RyCAN SDK 库版本字符串（GetRyCanServoLibVersion）。"""
+        try:
+            buf = (ctypes.c_uint8 * 30)()
+            self._lib.GetRyCanServoLibVersion(buf)
+            return bytes(buf).split(b"\x00")[0].decode("ascii", errors="ignore")
+        except Exception:  # pragma: no cover
+            return ""
+
     def check_connection(self, timeout_s: float = 0.5) -> dict:
         """连接性自检：读取 16 个电机状态。返回 {ok, version, replies, status}。
 
@@ -379,12 +388,7 @@ class RYH1HandController:
           * status 非 0 的电机（故障）
         """
         result = {"ok": False, "version": "", "replies": 0, "faults": [], "servos": {}}
-        try:
-            buf = (ctypes.c_uint8 * 30)()
-            self._lib.GetRyCanServoLibVersion(buf)
-            result["version"] = bytes(buf).split(b"\x00")[0].decode("ascii", errors="ignore")
-        except Exception:  # pragma: no cover
-            pass
+        result["version"] = self.version()
 
         replies = 0
         faults = []

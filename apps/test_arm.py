@@ -4,7 +4,7 @@ test_arm.py —— Aubo K5 机械臂单项验证（连接 / 上电 / 状态 / �
 
 用法：
   python apps/test_arm.py                     # 仅连接 + 读状态
-  python apps/test_arm.py --ip 192.168.1.200  # 指定 IP
+  python apps/test_arm.py --ip 192.168.1.100  # 指定 IP（实测可用）
   python apps/test_arm.py --move              # 附带安全小幅度关节运动 + 复位
   python apps/test_arm.py --startup           # 上电 + 启动（松刹车）后测试
   python apps/test_arm.py --movel             # 直线运动测试（需先确认 TCP 安全位姿）

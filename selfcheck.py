@@ -91,12 +91,13 @@ def main():
         ok_all &= check(False, "未找到 SDK 库（RyhandLibx64.dll）。请放到项目根目录或 lib/")
 
     print("\n== 3. 通信驱动文件 ==")
+    _dirs = [_root, os.path.join(_root, "lib"), os.path.join(_root, "lib", "pcan")]
     for name in ("PCANBasic.py", "ControlCAN.py", "ControlCAN.dll"):
         p = next((os.path.join(d, name) for d in _dirs if os.path.exists(os.path.join(d, name))), None)
         if p:
             check(True, f"找到 {p}")
         else:
-            check(False, f"未找到 {name}（放到根目录或 lib/，按需从官方 demo 拷贝）")
+            check(False, f"未找到 {name}（放到 lib/pcan/ 或根目录/lib/，按需从官方 demo 拷贝）")
 
     print("\n== 4. Intel RealSense（L515 连通性）==")
     try:

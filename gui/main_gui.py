@@ -35,7 +35,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-from lib.camera_lib1 import CameraModule
+from camera import CameraModule  # 与 apps/test_camera.py 同源（camera 包），已验证可连 L515
 from vision import HandPoseEstimator
 from vision.postprocess import JointAnglePostProcess
 from hand import RYH1HandController, JOINT_NAMES_CN, JOINT_NUM, status_text
@@ -158,6 +158,7 @@ class MainGui:
         self._after_id: str | None = None
 
         self.angle_history = deque(maxlen=3)
+        self._last_frame = (None, None, None)   # 最近一帧 (rgb, depth, intrinsics)，供子类复用
 
         self.post = JointAnglePostProcess(
             joint_num=JOINT_NUM, median_n=3,
@@ -459,7 +460,19 @@ class MainGui:
             self.state_var.set("相机已启动")
             self._poll_video()
         except Exception as exc:
-            messagebox.showerror("相机启动失败", str(exc))
+            # 相机启动失败：附加 L515 诊断（权限/设备/版本精准指引）
+            detail = str(exc)
+            if use_rs:
+                try:
+                    from lib.camera_lib1 import diagnose_realsense
+                    diag = diagnose_realsense()
+                    detail = (f"{detail}\n\n--- L515 诊断 ---\n" +
+                              "\n".join("• " + r for r in diag["reasons"]) +
+                              ("\n\n建议：\n" + "\n".join("• " + h for h in diag["hints"])
+                               if diag["hints"] else ""))
+                except Exception:
+                    pass
+            messagebox.showerror("相机启动失败", detail)
 
     def _stop_camera(self):
         logger.info(">>> _stop_camera 开始")
@@ -538,6 +551,10 @@ class MainGui:
         intrinsics = None
         if self.cam is not None and hasattr(self.cam, 'get_intrinsics'):
             intrinsics = self.cam.get_intrinsics()
+
+        # 保存当前帧供子类（Holistic/眼在手上）复用——子类不能再 get_nowait
+        # （队列已被本方法消费，再取会空队列导致 holistic 永远拿不到帧）
+        self._last_frame = (rgb, depth, intrinsics)
 
         results = []
         if self.est is not None:

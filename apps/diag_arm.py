@@ -4,7 +4,7 @@ diag_arm.py —— Aubo K5 机械臂深度诊断（连接 / 电源 / 状态 / �
 
 用法：
   python apps/diag_arm.py                    # 连接 + 全量状态
-  python apps/diag_arm.py --ip 192.168.1.200
+  python apps/diag_arm.py --ip 192.168.1.100   # 指定 IP（实测可用）
   python apps/diag_arm.py --poweron          # 上电+启动
   python apps/diag_arm.py --freedrive 10     # 进入拖拽示教 10 秒后退出
   python apps/diag_arm.py --fk                # 正解自检

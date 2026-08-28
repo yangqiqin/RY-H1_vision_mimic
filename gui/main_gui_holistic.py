@@ -62,68 +62,93 @@ class MainGuiHolistic(MainGuiArm):
         self.follower: ArmFollower = ArmFollower()
         self.holistic_running = False
         self.holistic_state_var = tk.StringVar(value="协同未启动")
+        self._last_wrist_3d = None           # 最近一帧腕部 3D（标定辅助）
         self._build_holistic_ui()
         self._holistic_poll_loop()
 
     # ==================================================================
-    # 协同控制面板
+    # 协同控制面板（加入机械臂 Notebook 的第二个标签页）
     # ==================================================================
     def _build_holistic_ui(self):
-        root = self.root
-        # 第 5 行：协同控制面板
-        root.grid_rowconfigure(5, weight=0)
-        frame = ttk.LabelFrame(root, text="协同控制（MediaPipe Holistic：人体→机械臂 + 手→灵巧手）")
-        frame.grid(row=5, column=0, sticky="ew", padx=5, pady=2)
+        # 复用父类创建的 Notebook（机械臂控制 tab0），协同加为 tab1
+        tab_hol = ttk.Frame(self.arm_notebook)
+        self.arm_notebook.add(tab_hol, text="  协同控制(Holistic)  ")
+        tab_hol.grid_columnconfigure(0, weight=1)
+        tab_hol.grid_columnconfigure(1, weight=1)
+        tab_hol.grid_columnconfigure(2, weight=1)
+        tab_hol.grid_rowconfigure(0, weight=1)
 
-        # 行 1：使能开关 + 检测状态
-        r1 = ttk.Frame(frame)
+        # ---- 左列：使能与跟随 ----
+        left = ttk.LabelFrame(tab_hol, text="协同控制开关")
+        left.grid(row=0, column=0, sticky="nsew", padx=4, pady=2)
+
+        r1 = ttk.Frame(left)
         r1.pack(fill="x", padx=4, pady=2)
         self.holistic_enable_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(r1, text="启用 Holistic 检测", variable=self.holistic_enable_var,
-                        command=self._holistic_toggle).pack(side="left", padx=2)
+                        command=self._holistic_toggle).pack(anchor="w", pady=1)
         self.holistic_arm_follow_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(r1, text="机械臂跟随(腕→TCP)", variable=self.holistic_arm_follow_var,
-                        command=self._holistic_apply_flags).pack(side="left", padx=2)
+        ttk.Checkbutton(r1, text="机械臂跟随(腕→TCP movel)",
+                        variable=self.holistic_arm_follow_var,
+                        command=self._holistic_apply_flags).pack(anchor="w", pady=1)
         self.holistic_hand_follow_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(r1, text="灵巧手跟随(手→16角)", variable=self.holistic_hand_follow_var,
-                        command=self._holistic_apply_flags).pack(side="left", padx=2)
-        self.holistic_side_var = tk.StringVar(value="right")
-        ttk.Label(r1, text="手:").pack(side="left", padx=(10, 2))
-        ttk.Radiobutton(r1, text="右", value="right", variable=self.holistic_side_var,
-                        command=self._holistic_apply_flags).pack(side="left")
-        ttk.Radiobutton(r1, text="左", value="left", variable=self.holistic_side_var,
-                        command=self._holistic_apply_flags).pack(side="left")
-        ttk.Label(r1, textvariable=self.holistic_state_var, foreground="purple").pack(side="left", padx=8)
+        ttk.Checkbutton(r1, text="灵巧手跟随(手→16关节角)",
+                        variable=self.holistic_hand_follow_var,
+                        command=self._holistic_apply_flags).pack(anchor="w", pady=1)
 
-        # 行 2：映射标定参数（offset/scale/add 前3个）
-        r2 = ttk.Frame(frame)
+        r1b = ttk.Frame(left)
+        r1b.pack(fill="x", padx=4, pady=2)
+        ttk.Label(r1b, text="控制手:").pack(side="left")
+        self.holistic_side_var = tk.StringVar(value="right")
+        ttk.Radiobutton(r1b, text="右", value="right", variable=self.holistic_side_var,
+                        command=self._holistic_apply_flags).pack(side="left")
+        ttk.Radiobutton(r1b, text="左", value="left", variable=self.holistic_side_var,
+                        command=self._holistic_apply_flags).pack(side="left")
+        self.holistic_state_var = tk.StringVar(value="协同未启动")
+        ttk.Label(left, textvariable=self.holistic_state_var, foreground="purple").pack(
+            anchor="w", padx=4, pady=2)
+
+        # ---- 中列：映射标定 ----
+        mid = ttk.LabelFrame(tab_hol, text="腕→TCP 映射标定（先标定再跟随！）")
+        mid.grid(row=0, column=1, sticky="nsew", padx=4, pady=2)
+
+        r2 = ttk.Frame(mid)
         r2.pack(fill="x", padx=4, pady=2)
-        ttk.Label(r2, text="映射标定 offset(x,y,z):").pack(side="left")
+        ttk.Label(r2, text="offset(x,y,z):").pack(side="left")
         self.calib_offset_vars = []
         for i in range(3):
             var = tk.StringVar(value=str(DEFAULT_CALIB["offset"][i]))
             self.calib_offset_vars.append(var)
             ttk.Entry(r2, textvariable=var, width=6).pack(side="left", padx=1)
-        ttk.Label(r2, text="scale:").pack(side="left", padx=(8, 2))
+        r2b = ttk.Frame(mid)
+        r2b.pack(fill="x", padx=4, pady=2)
+        ttk.Label(r2b, text="scale(x,y,z):").pack(side="left")
         self.calib_scale_vars = []
         for i in range(3):
             var = tk.StringVar(value=str(DEFAULT_CALIB["scale"][i]))
             self.calib_scale_vars.append(var)
-            ttk.Entry(r2, textvariable=var, width=5).pack(side="left", padx=1)
-        ttk.Label(r2, text="add:").pack(side="left", padx=(8, 2))
+            ttk.Entry(r2b, textvariable=var, width=6).pack(side="left", padx=1)
+        r2c = ttk.Frame(mid)
+        r2c.pack(fill="x", padx=4, pady=2)
+        ttk.Label(r2c, text="add(x,y,z):  ").pack(side="left")
         self.calib_add_vars = []
         for i in range(3):
             var = tk.StringVar(value=str(DEFAULT_CALIB["add"][i]))
             self.calib_add_vars.append(var)
-            ttk.Entry(r2, textvariable=var, width=5).pack(side="left", padx=1)
-        ttk.Button(r2, text="应用标定", command=self._holistic_apply_calib).pack(side="left", padx=6)
+            ttk.Entry(r2c, textvariable=var, width=6).pack(side="left", padx=1)
+        r2d = ttk.Frame(mid)
+        r2d.pack(fill="x", padx=4, pady=2)
+        ttk.Button(r2d, text="应用标定", command=self._holistic_apply_calib).pack(side="left", padx=2)
+        ttk.Button(r2d, text="读当前腕部填充offset", command=self._holistic_fill_offset).pack(side="left", padx=2)
+        ttk.Label(r2d, text="（人体腕部3D − 期望TCP ≈ offset）", font=("", 7)).pack(side="left", padx=4)
 
-        # 行 3：状态显示
-        r3 = ttk.Frame(frame)
-        r3.pack(fill="x", padx=4, pady=2)
+        # ---- 右列：状态显示 ----
+        right = ttk.LabelFrame(tab_hol, text="实时状态")
+        right.grid(row=0, column=2, sticky="nsew", padx=4, pady=2)
         self.holistic_status_var = tk.StringVar(value="状态: -")
-        ttk.Label(r3, textvariable=self.holistic_status_var, font=("Consolas", 8),
-                  foreground="purple").pack(side="left")
+        ttk.Label(right, textvariable=self.holistic_status_var, font=("Consolas", 8),
+                  foreground="purple", justify="left", wraplength=420).pack(
+            fill="x", padx=4, pady=2)
 
     # ==================================================================
     # Holistic 控制
@@ -174,6 +199,24 @@ class MainGuiHolistic(MainGuiArm):
         except ValueError:
             messagebox.showerror("输入错误", "标定参数必须是数字")
 
+    def _holistic_fill_offset(self):
+        """辅助标定：读取当前检测到的腕部 3D，作为 offset 参考（需人体在画面中）。
+
+        标定技巧：人把腕部放到"希望机械臂 TCP 到达的位置"（以机械臂基座系看是期望 TCP），
+        相机系下该腕部 3D ≈ offset（当 scale=1、add=0 时）。读取后填入 offset 输入框。
+        """
+        if not self.holistic_running or self.holistic is None:
+            messagebox.showwarning("提示", "请先启用 Holistic 检测并确保检测到人体")
+            return
+        # 用最近一帧的腕部（通过 _holistic_step 的缓存）
+        wrist = getattr(self, "_last_wrist_3d", None)
+        if wrist is None:
+            messagebox.showwarning("提示", "未检测到腕部 3D，请确认人体在画面中")
+            return
+        for i in range(3):
+            self.calib_offset_vars[i].set(f"{wrist[i]:.4f}")
+        self.holistic_status_var.set("已用当前腕部 3D 填充 offset（再按实际偏差微调）")
+
     # ==================================================================
     # 每帧协同处理（挂到主轮询）
     # ==================================================================
@@ -201,6 +244,7 @@ class MainGuiHolistic(MainGuiArm):
             parts.append("手✓")
         if r.wrist_3d is not None:
             w = r.wrist_3d
+            self._last_wrist_3d = w          # 供"填充 offset"标定辅助
             parts.append(f"腕3D=({w[0]:.2f},{w[1]:.2f},{w[2]:.2f})")
         if r.arm_target_pose is not None:
             p = r.arm_target_pose
@@ -245,11 +289,11 @@ class MainGuiHolistic(MainGuiArm):
         # 若 holistic 运行且相机在，追加协同处理
         if self.holistic_running and self.cam is not None:
             try:
-                # 从队列取最新帧（非阻塞）
-                rgb, depth = self.frame_q.get_nowait()
-                intrinsics = None
-                if hasattr(self.cam, 'get_intrinsics'):
-                    intrinsics = self.cam.get_intrinsics()
+                # 复用父类已处理的当前帧（父类 _poll_video 已把帧存入 self._last_frame，
+                # 不能再用 frame_q.get_nowait()——队列已被父类消费，再取会空队列）
+                rgb, depth, intrinsics = getattr(self, "_last_frame", (None, None, None))
+                if rgb is None:
+                    return
                 r = self._holistic_step(rgb, depth, intrinsics)
                 # 绘制骨架叠加到画面（在原视频 canvas 上再画一层）
                 if r is not None and self.checkbox_vars["show_skeleton"].get():

@@ -287,6 +287,18 @@ class AuboK5ArmController:
             logger.warning("[arm] getTcpPose: %s", exc)
             return None
 
+    def get_flange_pose(self) -> Optional[List[float]]:
+        """当前【法兰】位姿 [x,y,z,rx,ry,rz]（米/弧度，不含 TCP 偏移）。
+
+        手眼标定坐标转换必须用【法兰位姿】（相机装在法兰上），
+        而不是含 TCP 偏移的 getTcpPose（那是灵巧手 TCP 位置，会引入偏移误差）。
+        """
+        try:
+            return list(self._robot_state.getToolPose())
+        except Exception as exc:
+            logger.warning("[arm] getToolPose: %s", exc)
+            return None
+
     def get_state_summary(self) -> dict:
         """状态汇总（GUI/诊断显示用）。"""
         return {
@@ -445,9 +457,26 @@ class AuboK5ArmController:
         return 0, None
 
     def move_home(self, block: bool = True) -> Tuple[int, Optional[str]]:
-        """回到初始关节角（示例 q 起点：J1=0, J2=-15°, J3=100°, J4=25°, J5=90°, J6=0）。"""
-        home = [0.0, -15.0, 100.0, 25.0, 90.0, 0.0]
-        return self.movej(_deg2rad_list(home), block=block)
+        """回到初始关节角（取 arm_config.HOME_JOINT_DEG，GUI 可调可保存）。
+
+        默认：J1=0, J2=-15°, J3=100°, J4=25°, J5=90°, J6=0（官方示例起始位）。
+        用户可在 GUI 点【记录当前为初始位】把当前位置设为新的 HOME，随后"回初始位"即回该处。
+        """
+        from .arm_config import HOME_JOINT_DEG
+        return self.movej(_deg2rad_list(list(HOME_JOINT_DEG)), block=block)
+
+    def set_home(self, joint_deg: List[float]) -> None:
+        """设置新的初始位置（度，6 维）——GUI【记录当前为初始位】调用。"""
+        from .arm_config import HOME_JOINT_DEG
+        if len(joint_deg) != DOF:
+            raise ValueError(f"需要 {DOF} 个角度")
+        HOME_JOINT_DEG[:] = [float(v) for v in joint_deg]
+        logger.info("[arm] HOME 已更新为 %s", [round(v, 1) for v in HOME_JOINT_DEG])
+
+    def get_home(self) -> List[float]:
+        """读取当前初始位置（度，6 维）。"""
+        from .arm_config import HOME_JOINT_DEG
+        return list(HOME_JOINT_DEG)
 
     def stop_move(self) -> int:
         """停止运动（stopMove）。"""

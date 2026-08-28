@@ -226,7 +226,7 @@ def __init__(
 
 | 参数 | 默认来源 | 含义 |
 |---|---|---|
-| `ip` | `ARM_CONFIG["ip"]` = `"192.168.1.200"` | 机械臂控制柜 IP（实机按控制柜网口 IP；官方示例默认 127.0.0.1 是本机/模拟器） |
+| `ip` | `ARM_CONFIG["ip"]` = `"192.168.1.100"` | 机械臂控制柜 IP（实机按控制柜网口 IP；官方示例默认 127.0.0.1 是本机/模拟器） |
 | `rpc_port` | `ARM_CONFIG["rpc_port"]` = `30004` | RPC 服务端口 |
 | `username` / `password` | `"aubo"` / `"123456"` | 控制柜登录账号 |
 | `speed_fraction` | `ARM_CONFIG["speed_fraction"]` = `0.3` | 全局速度比例 0~1（0.3 是安全起步值；官方示例用 0.75） |
@@ -1297,7 +1297,7 @@ def quick_check(ip: Optional[str] = None) -> dict:
 
 ### Q1：`open()` 返回 False，日志显示"连接失败/超时"
 **排查链**：
-1. 控制柜是否开机、网线是否连通（`ping <ip>`，默认 192.168.1.200）；
+1. 控制柜是否开机、网线是否连通（`ping <ip>`，默认 192.168.1.100）；
 2. 电脑网卡 IP 是否与控制柜同网段（如 192.168.1.x），Windows 防火墙是否放行 30004 端口；
 3. `setRequestTimeout(1000)` 下超时 = 网络层不通；对照 `arm_config.CONN_ERROR_TEXT` 里的 `AUBO_TIMEOUT`（网络不通/防火墙）与 `AUBO_CONN_REFUSED`（IP/端口错或控制柜未开机）；
 4. 若用模拟器/本机测试，把 `ARM_CONFIG["ip"]` 改为 `127.0.0.1`。

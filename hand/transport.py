@@ -60,15 +60,44 @@ class CanTransport:
 
     # ------------------------------------------------------------------
     def _ensure_driver_path(self):
-        """确保项目根目录与 lib/ 在 sys.path 中（驱动文件 PCANBasic.py / ControlCAN.py）。
+        """确保项目根目录 / lib/ / lib/pcan/ 在 sys.path 中。
 
-        资源统一放在 lib/（模型/驱动/参考），同时保留根目录兼容旧布局。
-        即使入口脚本已做路径引导，这里再兜底一次。
+        驱动文件（PCANBasic.py / ControlCAN.py）用户已统一移到 lib/pcan/ 子目录，
+        同时保留根目录与 lib/ 兼容旧布局。即使入口脚本已做路径引导，这里再兜底一次。
         """
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录
-        for d in (here, os.path.join(here, "lib")):
+        for d in (here, os.path.join(here, "lib"), os.path.join(here, "lib", "pcan")):
             if d not in sys.path:
                 sys.path.insert(0, d)
+
+    @staticmethod
+    def _import_pcan():
+        """导入 PCANBasic 驱动（兼容多种存放位置）。
+
+        用户把 PCANBasic.py 放在 lib/pcan/ 子目录（资源归档）。
+        按优先级尝试：import PCANBasic（lib/pcan 已在 sys.path）→
+        from lib import PCANBasic → from lib.pcan import PCANBasic。
+        """
+        import importlib
+        last_err = None
+        for mod in ("PCANBasic",):
+            try:
+                return importlib.import_module(mod)
+            except ImportError as exc:
+                last_err = exc
+        try:
+            from lib import PCANBasic as _m
+            return _m
+        except ImportError as exc:
+            last_err = exc
+        try:
+            from lib.pcan import PCANBasic as _m
+            return _m
+        except ImportError as exc:
+            last_err = exc
+        raise ImportError(
+            "未找到 PCANBasic.py：请把官方驱动文件放到 lib/pcan/（或项目根目录/lib/）。"
+            f"原始错误: {last_err}")
 
     # ------------------------------------------------------------------
     def open(self):
@@ -88,7 +117,7 @@ class CanTransport:
     # ---- PCAN ----
     def _open_pcan(self):
         self._ensure_driver_path()
-        from lib import PCANBasic as pcan
+        pcan = self._import_pcan()
         dev = pcan.PCANBasic()
         res = dev.Initialize(pcan.PCAN_USBBUS1, pcan.PCAN_BAUD_1M)
         if res != pcan.PCAN_ERROR_OK:
@@ -131,7 +160,7 @@ class CanTransport:
     def send(self, can_id: int, data: bytes):
         """发送一帧（SDK 写回调调用）。"""
         if self.method == "pcan":
-            from lib import PCANBasic as pcan
+            pcan = self._import_pcan()
             _, dev = self._pcan
             msg = pcan.TPCANMsg()
             msg.ID = can_id
@@ -177,7 +206,7 @@ class CanTransport:
             time.sleep(0.001)
 
     def _rx_pcan(self):
-        from lib import PCANBasic as pcan
+        pcan = self._import_pcan()
         _, dev = self._pcan
         res, msg, _ts = dev.Read(pcan.PCAN_USBBUS1)
         if res == pcan.PCAN_ERROR_OK and msg.LEN > 0:
@@ -225,7 +254,7 @@ class CanTransport:
             self._rx_thread.join(timeout=1.0)
         try:
             if self.method == "pcan" and self._pcan:
-                from lib import PCANBasic as pcan
+                pcan = self._import_pcan()
                 _, dev = self._pcan
                 dev.Uninitialize(pcan.PCAN_USBBUS1)
             elif self.method == "canii" and self._canii:

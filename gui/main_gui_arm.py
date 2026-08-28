@@ -2,23 +2,13 @@
 """
 main_gui_arm.py —— 综合控制界面（灵巧手 + Aubo K5 机械臂，TCP 坐标联动）
 
-在原 gui/main_gui.py（仅灵巧手）基础上扩展，**不修改原文件**：
-  * 继承 MainGui，完整保留：相机(USB/L515)、MediaPipe 姿态、精度后处理、
-    灵巧手连接/校准/动作模仿/16 关节滑条；
-  * 新增底部"机械臂控制"面板：
-      - 连接（IP/端口/登录） + 上电/启动/断电 + 停止 + 拖拽示教 + 回初始位
-      - 6 轴关节滑条（movej）与实时状态/关节角/TCP 位姿显示
-      - 位姿输入 movel（TCP 系）
-      - TCP 坐标联动：勾选后把"灵巧手安装偏移"写入机械臂 setTcpOffset，
-        movel 的目标位姿即以灵巧手 TCP 为基准
-      - "臂手联动"：机械臂 movel 到位后自动执行灵巧手预设动作（握拳/张开/放松）
-
-用法：
-  python -m gui.main_gui_arm
-
-安全提示：
-  * 首次连接建议速度比例 0.2~0.3（面板滑条可调）；
-  * 运动前确认机械臂周围无人、无障碍物。
+继承 MainGui，扩展机械臂控制，并重新布局视频/参数区。
+主要改动：
+  - 删除 16 个滑条行（保留按钮）
+  - 视频区与参数区各占一半宽度
+  - 16 关节角以 4 列网格显示，避免竖条
+  - 参数区固定存在，无论相机是否启动
+  - 机械臂 6 轴滑条范围根据 JOINT_RANGE_DEG 动态设置
 """
 
 from __future__ import annotations
@@ -26,7 +16,7 @@ from __future__ import annotations
 import os
 import sys
 
-# ---- 路径引导（必须最先执行） ----
+# ---- 路径引导 ----
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(sys.path[0])
 try:
@@ -36,41 +26,157 @@ except Exception:
     pass
 
 import math
-import threading
-import time
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 from gui.main_gui import MainGui, JOINT_NAMES_CN
 from arm import AuboK5ArmController
-from arm.arm_config import ARM_CONFIG, DOF
+from arm.arm_config import ARM_CONFIG, DOF, JOINT_RANGE_DEG, JOINT_STEP_DEG
 
 
 class MainGuiArm(MainGui):
-    """扩展版主界面：灵巧手（继承 MainGui）+ Aubo K5 机械臂。"""
-
     def __init__(self, root: tk.Tk):
-        # 先构建原灵巧手界面（相机/姿态/后处理/手控/布局）
+        # 1. 构建基类界面（相机、灵巧手、校准等）
         super().__init__(root)
-        # 机械臂相关状态
+
+        # 2. 删除 16 个滑条行（保留按钮）
+        self._remove_joint_slider_rows()
+
+        # 3. 重新布局视频与参数区（grid 列权重）
+        self._reorganize_video_param_layout()
+
+        # 4. 重写参数显示方法（将基类的 _update_video 替换为自定义版本）
+        self._update_video = self._custom_update_video
+
+        # 5. 机械臂相关状态
         self.arm: AuboK5ArmController | None = None
         self.arm_connected = False
         self.arm_state_var = tk.StringVar(value="机械臂未连接")
+
+        # 6. 创建机械臂面板（底部 Notebook）
         self._build_arm_ui()
+
+        # 7. 初始化机械臂初始位显示
+        self._arm_update_home_label()
+
+        # 8. 启动机械臂状态轮询
         self._arm_poll_loop()
 
     # ==================================================================
-    # 机械臂面板 UI
+    # 删除 16 个滑条行（但保留按钮行）
+    # ==================================================================
+    def _remove_joint_slider_rows(self):
+        """查找包含 16 个滑条的容器，销毁所有包含 Scale 的子控件（每一行），保留按钮行。"""
+        def find_slider_container(parent):
+            for child in parent.winfo_children():
+                if isinstance(child, ttk.LabelFrame) and "关节" in child.cget("text"):
+                    return child
+                res = find_slider_container(child)
+                if res:
+                    return res
+            return None
+
+        container = find_slider_container(self.root)
+        if not container:
+            return
+
+        # 遍历子控件，销毁包含 Scale 的 Frame
+        for child in container.winfo_children():
+            if any(isinstance(c, tk.Scale) for c in child.winfo_children()):
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+
+    # ==================================================================
+    # 重新布局视频与参数区（列权重调整）
+    # ==================================================================
+    def _reorganize_video_param_layout(self):
+        """让视频和参数各占一半宽度，参数区不再狭小。"""
+        root = self.root
+        try:
+            root.grid_columnconfigure(0, weight=2)  # 视频区
+            root.grid_columnconfigure(1, weight=2)  # 参数区
+        except Exception:
+            pass
+        # 确保 row1（视频/参数行）高度充足
+        root.grid_rowconfigure(1, weight=4)
+
+    # ==================================================================
+    # 自定义参数显示（4 列网格）
+    # ==================================================================
+    def _custom_update_video(self):
+        """
+        重写基类的 _update_video，保留视频绘制（调用父类），
+        但重新设置参数文本为 4 列网格。
+        """
+        # 1. 调用基类绘制视频（骨架等）
+        try:
+            super()._update_video()
+        except Exception:
+            pass
+
+        # 2. 获取当前检测数据
+        est = getattr(self, 'est', None)
+        angles_deg = getattr(est, 'angles_deg', None) if est else None
+        hand_lr = getattr(est, 'hand_lr', '右') if est else '右'
+        fist_conf = getattr(est, 'fist_confidence', 0.0) if est else 0.0
+
+        # 3. 构建显示文本
+        lines = [f"手: {hand_lr}  握拳置信度: {fist_conf:.2f}"]
+
+        if angles_deg is not None and len(angles_deg) == 16:
+            # 4 列显示
+            for row in range(4):
+                row_str = ""
+                for col in range(4):
+                    idx = row * 4 + col
+                    if idx < 16:
+                        name = JOINT_NAMES_CN[idx] if idx < len(JOINT_NAMES_CN) else f"J{idx+1}"
+                        val = angles_deg[idx]
+                        row_str += f"{name}:{val:5.1f}°  "
+                lines.append(row_str)
+        else:
+            lines.append("未识别到手")
+
+        # 4. 查找参数标签并更新
+        if hasattr(self, 'param_label') and self.param_label is not None:
+            self.param_label.config(text="\n".join(lines))
+        else:
+            for child in self.root.winfo_children():
+                if isinstance(child, ttk.Label) and "手:" in child.cget("text"):
+                    child.config(text="\n".join(lines))
+                    break
+
+    # ==================================================================
+    # 机械臂面板 UI（底部 Notebook，多标签页）
     # ==================================================================
     def _build_arm_ui(self):
         root = self.root
-        # 机械臂面板占第 4 行（原界面 0~3 行不动）
-        root.grid_rowconfigure(4, weight=0)
-        frame = ttk.LabelFrame(root, text="Aubo K5 机械臂控制（TCP 坐标联动）")
-        frame.grid(row=4, column=0, sticky="ew", padx=5, pady=2)
+        try:
+            root.geometry("1680x1080")
+        except Exception:
+            pass
 
-        # ---- 行 1：连接 + 速度 ----
-        r1 = ttk.Frame(frame)
+        self.arm_notebook = ttk.Notebook(root)
+        self.arm_notebook.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=5, pady=2)
+
+        tab_arm = ttk.Frame(self.arm_notebook)
+        self.arm_notebook.add(tab_arm, text="  机械臂控制  ")
+        self._build_arm_tab(tab_arm)
+
+    def _build_arm_tab(self, parent: ttk.Frame):
+        """机械臂控制标签页：多列布局，功能完整。"""
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_columnconfigure(1, weight=2)
+        parent.grid_columnconfigure(2, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+
+        # ---- 左列：连接 + 电源 + 状态 ----
+        left = ttk.LabelFrame(parent, text="连接与电源")
+        left.grid(row=0, column=0, sticky="nsew", padx=4, pady=2)
+
+        r1 = ttk.Frame(left)
         r1.pack(fill="x", padx=4, pady=2)
         ttk.Label(r1, text="IP:").pack(side="left")
         self.arm_ip_var = tk.StringVar(value=ARM_CONFIG["ip"])
@@ -78,65 +184,136 @@ class MainGuiArm(MainGui):
         ttk.Label(r1, text="端口:").pack(side="left")
         self.arm_port_var = tk.StringVar(value=str(ARM_CONFIG["rpc_port"]))
         ttk.Entry(r1, textvariable=self.arm_port_var, width=6).pack(side="left", padx=2)
-        ttk.Button(r1, text="连接", command=self._arm_connect).pack(side="left", padx=4)
+        ttk.Button(r1, text="连接", command=self._arm_connect).pack(side="left", padx=2)
         ttk.Button(r1, text="断开", command=self._arm_disconnect).pack(side="left", padx=2)
-        ttk.Label(r1, text="速度比例:").pack(side="left", padx=(14, 2))
-        self.arm_fraction_var = tk.DoubleVar(value=ARM_CONFIG["speed_fraction"])
-        tk.Scale(r1, from_=0.05, to=1.0, resolution=0.05, orient=tk.HORIZONTAL,
-                 variable=self.arm_fraction_var, length=160, showvalue=True,
-                 command=lambda _v: self._arm_apply_fraction()).pack(side="left")
-        ttk.Label(r1, textvariable=self.arm_state_var, foreground="blue").pack(side="left", padx=8)
 
-        # ---- 行 2：电源/动作 ----
-        r2 = ttk.Frame(frame)
+        r1b = ttk.Frame(left)
+        r1b.pack(fill="x", padx=4, pady=2)
+        ttk.Label(r1b, text="速度比例:").pack(side="left")
+        self.arm_fraction_var = tk.DoubleVar(value=ARM_CONFIG["speed_fraction"])
+        tk.Scale(r1b, from_=0.05, to=1.0, resolution=0.05, orient=tk.HORIZONTAL,
+                 variable=self.arm_fraction_var, length=220, showvalue=True,
+                 command=lambda _v: self._arm_apply_fraction()).pack(side="left")
+        ttk.Label(r1b, textvariable=self.arm_state_var, foreground="blue").pack(side="left", padx=8)
+
+        r2 = ttk.Frame(left)
         r2.pack(fill="x", padx=4, pady=2)
         ttk.Button(r2, text="上电+启动", command=self._arm_poweron).pack(side="left", padx=2)
         ttk.Button(r2, text="断电", command=self._arm_poweroff).pack(side="left", padx=2)
         ttk.Button(r2, text="停止", command=self._arm_stop).pack(side="left", padx=2)
-        ttk.Button(r2, text="拖拽示教(开)", command=lambda: self._arm_freedrive(True)).pack(side="left", padx=2)
-        ttk.Button(r2, text="拖拽示教(关)", command=lambda: self._arm_freedrive(False)).pack(side="left", padx=2)
-        ttk.Button(r2, text="回初始位", command=self._arm_home).pack(side="left", padx=2)
+        ttk.Button(r2, text="拖拽示教开", command=lambda: self._arm_freedrive(True)).pack(side="left", padx=2)
+        ttk.Button(r2, text="拖拽示教关", command=lambda: self._arm_freedrive(False)).pack(side="left", padx=2)
 
-        # ---- 行 3：6 轴关节滑条 + 状态 ----
-        r3 = ttk.Frame(frame)
-        r3.pack(fill="x", padx=4, pady=2)
+        # 初始位区（可调）
+        r2b = ttk.Frame(left)
+        r2b.pack(fill="x", padx=4, pady=2)
+        ttk.Label(r2b, text="初始位(度):").pack(side="left")
+        self.arm_home_label = tk.StringVar(value="0, -15, 100, 25, 90, 0")
+        ttk.Label(r2b, textvariable=self.arm_home_label, font=("Consolas", 8)).pack(side="left", padx=2)
+        ttk.Button(r2b, text="记录当前为初始位", command=self._arm_set_home_current).pack(side="left", padx=2)
+        ttk.Button(r2b, text="回初始位", command=self._arm_home).pack(side="left", padx=2)
+
+        # 状态显示（多行）
+        self.arm_status_var = tk.StringVar(value="状态: -")
+        ttk.Label(left, textvariable=self.arm_status_var, font=("Consolas", 8),
+                  foreground="green", justify="left", wraplength=560).pack(
+            fill="x", padx=4, pady=2)
+
+        # ---- 中列：6 轴手动操控（滑条 + 微调） ----
+        mid = ttk.LabelFrame(parent, text="手动操控（关节角，度）")
+        mid.grid(row=0, column=1, sticky="nsew", padx=4, pady=2)
+
         self.arm_joint_vars = []
+        header = ttk.Frame(mid)
+        header.pack(fill="x", padx=2)
+        ttk.Label(header, text="轴", width=3).pack(side="left")
+        ttk.Label(header, text="关节名", width=12).pack(side="left")
+        ttk.Label(header, text="角度(°)", width=8).pack(side="left")
+        ttk.Label(header, text="滑条", width=16).pack(side="left")
+        ttk.Label(header, text="微调", width=14).pack(side="left")
         for i in range(DOF):
-            f = ttk.Frame(r3)
-            f.pack(side="left", padx=2)
+            row = ttk.Frame(mid)
+            row.pack(fill="x", padx=2, pady=1)
+            ttk.Label(row, text=f"J{i+1}", width=3).pack(side="left")
+            ttk.Label(row, text=JOINT_NAMES_CN[i], width=12, font=("", 8)).pack(side="left")
             var = tk.DoubleVar(value=0.0)
             self.arm_joint_vars.append(var)
-            ttk.Label(f, text=JOINT_NAMES_CN[i], font=("", 7)).pack(anchor="w")
-            tk.Scale(f, from_=-175, to=175, resolution=1, orient=tk.HORIZONTAL,
-                     variable=var, length=90, showvalue=False).pack()
-            ttk.Label(f, textvariable=var, width=5, font=("", 7)).pack()
-        ttk.Button(r3, text="执行 movej", command=self._arm_movej_from_sliders).pack(side="left", padx=4)
-        self.arm_status_var = tk.StringVar(value="状态: -")
-        ttk.Label(r3, textvariable=self.arm_status_var, font=("Consolas", 8),
-                  foreground="green").pack(side="left", padx=8)
+            ttk.Label(row, textvariable=var, width=8, font=("Consolas", 8)).pack(side="left")
 
-        # ---- 行 4：位姿输入 movel + TCP 联动 ----
-        r4 = ttk.Frame(frame)
-        r4.pack(fill="x", padx=4, pady=2)
-        ttk.Label(r4, text="movel 位姿 [x,y,z,rx,ry,rz] (m/rad):").pack(side="left")
+            # ========== 关键修改：滑条范围从 JOINT_RANGE_DEG 读取 ==========
+            lo, hi = JOINT_RANGE_DEG[i]
+            tk.Scale(row, from_=lo, to=hi, resolution=1, orient=tk.HORIZONTAL,
+                     variable=var, length=180, showvalue=False).pack(side="left", padx=2)
+
+            bf = ttk.Frame(row)
+            bf.pack(side="left")
+            ttk.Button(bf, text="-", width=2,
+                       command=lambda idx=i: self._arm_joint_nudge(idx, -1)).pack(side="left")
+            ttk.Button(bf, text="+", width=2,
+                       command=lambda idx=i: self._arm_joint_nudge(idx, +1)).pack(side="left")
+
+        btns = ttk.Frame(mid)
+        btns.pack(fill="x", padx=2, pady=3)
+        ttk.Button(btns, text="执行 movej（全部轴）", command=self._arm_movej_from_sliders).pack(side="left", padx=3)
+        ttk.Button(btns, text="读取当前关节角", command=self._arm_read_joints).pack(side="left", padx=3)
+        ttk.Button(btns, text="回初始位", command=self._arm_home).pack(side="left", padx=3)
+
+        # ---- 右列：位姿 movel + TCP 联动 + 臂手联动 ----
+        right = ttk.LabelFrame(parent, text="位姿运动（movel，TCP 系）与联动")
+        right.grid(row=0, column=2, sticky="nsew", padx=4, pady=2)
+
+        rp = ttk.Frame(right)
+        rp.pack(fill="x", padx=4, pady=2)
+        ttk.Label(rp, text="位姿 [x,y,z,rx,ry,rz] (m/rad):").pack(anchor="w")
         self.arm_pose_vars = []
         for i in range(6):
             var = tk.StringVar(value="0.0")
             self.arm_pose_vars.append(var)
-            ttk.Entry(r4, textvariable=var, width=7).pack(side="left", padx=1)
-        ttk.Button(r4, text="执行 movel", command=self._arm_movel_from_entry).pack(side="left", padx=4)
+            ttk.Entry(rp, textvariable=var, width=8).pack(side="left", padx=1)
+        rpb = ttk.Frame(right)
+        rpb.pack(fill="x", padx=4, pady=2)
+        ttk.Button(rpb, text="执行 movel", command=self._arm_movel_from_entry).pack(side="left", padx=2)
+        ttk.Button(rpb, text="读当前位姿填充", command=self._arm_read_pose_fill).pack(side="left", padx=2)
 
-        # TCP 联动区
+        # 位置微调（x/y/z 与姿态 ±）
+        rpc = ttk.Frame(right)
+        rpc.pack(fill="x", padx=4, pady=2)
+        ttk.Label(rpc, text="微调:").pack(side="left")
+        self._add_pose_nudge(rpc, 0, "X-", "X+", is_pos=True)
+        self._add_pose_nudge(rpc, 1, "Y-", "Y+", is_pos=True)
+        self._add_pose_nudge(rpc, 2, "Z-", "Z+", is_pos=True)
+        ttk.Frame(rpc, width=6).pack(side="left")
+        self._add_pose_nudge(rpc, 3, "Rx-", "Rx+", is_pos=False)
+        self._add_pose_nudge(rpc, 4, "Ry-", "Ry+", is_pos=False)
+        self._add_pose_nudge(rpc, 5, "Rz-", "Rz+", is_pos=False)
+
+        rl = ttk.Frame(right)
+        rl.pack(fill="x", padx=4, pady=2)
         self.arm_link_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(r4, text="TCP联动(灵巧手安装偏移)",
+        ttk.Checkbutton(rl, text="TCP联动(灵巧手安装偏移)",
                         variable=self.arm_link_var,
-                        command=self._arm_toggle_link).pack(side="left", padx=(14, 2))
-        ttk.Button(r4, text="臂手联动:到位后握拳", command=self._arm_hand_link_fist).pack(side="left", padx=2)
-        ttk.Button(r4, text="臂手联动:到位后张开", command=self._arm_hand_link_open).pack(side="left", padx=2)
-        ttk.Button(r4, text="臂手联动:到位后放松", command=self._arm_hand_link_relax).pack(side="left", padx=2)
+                        command=self._arm_toggle_link).pack(side="left")
+
+        rh = ttk.Frame(right)
+        rh.pack(fill="x", padx=4, pady=2)
+        ttk.Label(rh, text="臂手联动:").pack(side="left")
+        ttk.Button(rh, text="到位后握拳", command=self._arm_hand_link_fist).pack(side="left", padx=2)
+        ttk.Button(rh, text="到位后张开", command=self._arm_hand_link_open).pack(side="left", padx=2)
+        ttk.Button(rh, text="到位后放松", command=self._arm_hand_link_relax).pack(side="left", padx=2)
+
+    def _add_pose_nudge(self, parent, idx: int, minus_text: str, plus_text: str, is_pos: bool):
+        """位姿微调按钮（位置步长 1cm / 姿态步长 0.05rad）。"""
+        from arm.arm_config import POS_STEP_M, POS_STEP_RAD
+        step = POS_STEP_M if is_pos else POS_STEP_RAD
+        bf = ttk.Frame(parent)
+        bf.pack(side="left", padx=1)
+        ttk.Button(bf, text=minus_text, width=3,
+                   command=lambda: self._arm_pose_nudge(idx, -step)).pack(side="left")
+        ttk.Button(bf, text=plus_text, width=3,
+                   command=lambda: self._arm_pose_nudge(idx, +step)).pack(side="left")
 
     # ==================================================================
-    # 机械臂操作
+    # 机械臂操作（连接/电源/运动/状态等）
     # ==================================================================
     def _require_arm(self) -> bool:
         if self.arm is None or not self.arm_connected:
@@ -182,7 +359,7 @@ class MainGuiArm(MainGui):
             try:
                 self.arm.set_speed_fraction(self.arm_fraction_var.get())
             except Exception as exc:
-                logger_warn(f"set speed fraction: {exc}")
+                print(f"[WARN] set speed fraction: {exc}")
 
     def _arm_poweron(self):
         if not self._require_arm():
@@ -237,6 +414,73 @@ class MainGuiArm(MainGui):
         self.arm_state_var.set(f"movej ret={ret} {msg or ''}")
         self._arm_refresh_state()
 
+    def _arm_joint_nudge(self, idx: int, direction: int):
+        if not self._require_arm():
+            return
+        cur = self.arm_joint_vars[idx].get()
+        new = cur + direction * JOINT_STEP_DEG
+        lo, hi = JOINT_RANGE_DEG[idx]
+        new = max(lo, min(hi, new))
+        self.arm_joint_vars[idx].set(round(new, 1))
+
+    def _arm_read_joints(self):
+        if not self._require_arm():
+            return
+        q = self.arm.get_joint_positions()
+        if q is None:
+            self.arm_state_var.set("读取关节角失败")
+            return
+        for i in range(DOF):
+            self.arm_joint_vars[i].set(round(math.degrees(q[i]), 1))
+        self.arm_state_var.set("已读取当前关节角并填充滑条")
+
+    def _arm_read_pose_fill(self):
+        if not self._require_arm():
+            return
+        pose = self.arm.get_tcp_pose()
+        if pose is None:
+            self.arm_state_var.set("读取位姿失败")
+            return
+        for i in range(6):
+            self.arm_pose_vars[i].set(f"{pose[i]:.4f}")
+        self.arm_state_var.set("已读取当前位姿并填充")
+
+    def _arm_pose_nudge(self, idx: int, delta: float):
+        if not self._require_arm():
+            return
+        try:
+            vals = [float(v.get()) for v in self.arm_pose_vars]
+        except ValueError:
+            messagebox.showerror("输入错误", "位姿必须是数字")
+            return
+        vals[idx] = round(vals[idx] + delta, 4)
+        for i in range(6):
+            self.arm_pose_vars[i].set(f"{vals[i]:.4f}")
+        ret, msg = self.arm.movel(vals, block=False, timeout_s=10)
+        self.arm_state_var.set(f"movel 微调 ret={ret} {msg or ''}")
+
+    def _arm_set_home_current(self):
+        if not self._require_arm():
+            return
+        q = self.arm.get_joint_positions()
+        if q is None:
+            messagebox.showerror("失败", "读取当前关节角失败")
+            return
+        deg = [math.degrees(v) for v in q]
+        self.arm.set_home(deg)
+        self._arm_update_home_label()
+        self.arm_state_var.set("已记录当前为初始位")
+
+    def _arm_update_home_label(self):
+        try:
+            home = self.arm.get_home() if (self.arm is not None) else None
+        except Exception:
+            home = None
+        from arm.arm_config import HOME_JOINT_DEG
+        if home is None:
+            home = HOME_JOINT_DEG
+        self.arm_home_label.set(", ".join(f"{v:g}" for v in home))
+
     def _arm_movel_from_entry(self):
         if not self._require_arm():
             return
@@ -250,7 +494,6 @@ class MainGuiArm(MainGui):
         self._arm_refresh_state()
 
     def _arm_toggle_link(self):
-        """TCP 坐标联动：勾选后把灵巧手安装偏移写入机械臂 setTcpOffset。"""
         if not self.arm_connected or self.arm is None:
             self.arm_link_var.set(False)
             messagebox.showwarning("提示", "请先连接机械臂")
@@ -263,13 +506,12 @@ class MainGuiArm(MainGui):
                 self.arm.apply_tcp_offset(off)
                 self.arm_state_var.set("TCP 联动已开启（位姿=灵巧手 TCP）")
             else:
-                self.arm.apply_tcp_offset([0.0] * 6)   # 关联动 = 基础 TCP
+                self.arm.apply_tcp_offset([0.0] * 6)
                 self.arm_state_var.set("TCP 联动已关闭（位姿=法兰 TCP）")
         except Exception as exc:
             messagebox.showerror("TCP 联动失败", str(exc))
 
     def _arm_hand_link(self, hand_action: str):
-        """臂手联动：先机械臂 movel 到面板输入的位姿，再执行灵巧手动作。"""
         if not self._require_arm():
             return
         if self.hand is None:
@@ -329,7 +571,6 @@ class MainGuiArm(MainGui):
             self.arm_status_var.set(f"状态读取失败: {exc}")
 
     def _arm_poll_loop(self):
-        """每 800ms 刷新机械臂状态（Tk after 常驻调度，非阻塞）。"""
         try:
             if self.arm_connected and self.arm is not None:
                 self._arm_refresh_state()
@@ -350,14 +591,9 @@ class MainGuiArm(MainGui):
         super()._on_close()
 
 
-def logger_warn(msg: str):
-    import logging
-    logging.getLogger("main_gui_arm").warning(msg)
-
-
 def main():
     root = tk.Tk()
-    MainGuiArm(root)
+    app = MainGuiArm(root)
     root.mainloop()
 
 
