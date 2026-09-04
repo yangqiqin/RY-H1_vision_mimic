@@ -1,0 +1,7 @@
+使用 SDK: aubo_sdk-0.27.1-rc.4-Windows_AMD64+b46f170
+导入库已生成: libaubo_sdk.dll.a
+导入库已生成: librobot_proxy.dll.a
+真实版链接失败（将保留演示版）:
+st&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::vector<std::vector<double, std::allocator<double> >, std::allocator<std::vector<double, std::allocator<double> > > > const&, std::vector<std::vector<double, std::allocator<double> >, std::allocator<std::vector<double, std::allocator<double> > > > const&)'
+collect2.exe: error: ld returned 1 exit status
+✅ 演示版(mock)编译成功，已放入 bin/collision_box_server.exe

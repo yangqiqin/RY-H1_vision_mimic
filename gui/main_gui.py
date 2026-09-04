@@ -149,6 +149,8 @@ class MainGui:
         self.cam: CameraModule | None = None
         self.est: HandPoseEstimator | None = None
         self.hand: RYH1HandController | None = None
+        # holistic 启用后置 True：暂停旧 hand 检测(est)与 mimic，只跑 holistic（已含手部检测）
+        self._suppress_legacy_hand = False
 
         self.frame_q: queue.Queue = queue.Queue(maxsize=2)
         self._running = False
@@ -557,7 +559,7 @@ class MainGui:
         self._last_frame = (rgb, depth, intrinsics)
 
         results = []
-        if self.est is not None:
+        if self.est is not None and not getattr(self, "_suppress_legacy_hand", False):
             try:
                 results = self.est.process(rgb, depth, intrinsics)
             except Exception as e:
@@ -600,7 +602,9 @@ class MainGui:
 
         # 信息展示
         info = "未识别到手"
-        if results and angles_deg is not None:
+        if getattr(self, "_suppress_legacy_hand", False):
+            info = "Holistic 接管检测（旧 hand 检测已停用）"
+        elif results and angles_deg is not None:
             r = results[0]
             dep = f" 深度={r.avg_depth_mm:.0f}mm" if r.avg_depth_mm else ""
             finger_names = ["拇指", "食指", "中指", "无名指", "小指"]

@@ -49,7 +49,7 @@ DEFAULT_CALIB = {
 }
 
 # 人体腕部到机械臂的常见方向（默认右手腕 → 机械臂"朝下"抓取）
-DEFAULT_GRASP_RPY = [math.pi, 0.0, 0.0]   # 绕 X 轴 180°（朝下）
+DEFAULT_GRASP_RPY = [0.0, math.pi/2, 0.0]   # 绕 X 轴 180°（朝下）
 
 
 class ArmFollower:
@@ -107,6 +107,56 @@ class ArmFollower:
             "min_xyz": list(self.min_xyz),
             "max_xyz": list(self.max_xyz),
         }
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def fit_calibration_from_pairs(pairs, fixed_rpy: Optional[List[float]] = None) -> dict:
+        """★ 多点最小二乘标定（比"单点 offset 填框"精准得多）。
+
+        pairs: list[(cam_xyz, arm_xyz)]，至少 3 组（越多越准，建议 ≥8 组且散布开）。
+          cam_xyz：手腕在相机系的 3D（米）；
+          arm_xyz：同一点上机械臂【法兰/TCP】实际到达的位置（米，与跟随使用的
+                   目标坐标系一致——跟随用法兰就记录法兰位姿）。
+        对每个轴独立拟合：arm_i = a_i · cam_i + b_i（最小二乘）。
+        返回与 map_wrist_to_arm_pose 兼容的 calib：scale=[a_i]，add=[b_i]，offset=0，
+        并附 rmse/r2 评估。
+
+        注：相机系坐标需几何稳定（帧间取均值/避免深度突变）才会准。
+        """
+        import numpy as _np
+        if len(pairs) < 3:
+            raise ValueError("至少需要 3 组对应点")
+        n = len(pairs)
+        X = _np.array([p[0][:3] for p in pairs], dtype=float)   # n×3
+        Y = _np.array([p[1][:3] for p in pairs], dtype=float)
+        scale, add = [], []
+        rmse_axes, r2_axes = [], []
+        for i in range(3):
+            # 一次项 + 常数项：Y_i = a X_i + b
+            A = _np.column_stack([X[:, i], _np.ones(n)])
+            coef, *_ = _np.linalg.lstsq(A, Y[:, i], rcond=None)
+            a, b = float(coef[0]), float(coef[1])
+            scale.append(a)
+            add.append(b)
+            pred = A @ coef
+            res = Y[:, i] - pred
+            rmse_axes.append(float(_np.sqrt(_np.mean(res ** 2))))
+            ss_tot = float(_np.sum((Y[:, i] - Y[:, i].mean()) ** 2))
+            r2_axes.append(1.0 - float(_np.sum(res ** 2)) / ss_tot if ss_tot > 1e-12 else 0.0)
+        calib = {
+            "offset": [0.0, 0.0, 0.0],
+            "scale": scale,
+            "add": add,
+            "fixed_rpy": list(fixed_rpy) if fixed_rpy else list(DEFAULT_GRASP_RPY),
+            "min_xyz": DEFAULT_CALIB["min_xyz"],
+            "max_xyz": DEFAULT_CALIB["max_xyz"],
+        }
+        calib["_fit"] = {
+            "n_samples": n,
+            "rmse_m": rmse_axes,      # 每轴残差均方根（米）——越小越准
+            "r2": r2_axes,
+        }
+        return calib
 
     # ------------------------------------------------------------------
     def estimate_pose_from_arm(self, shoulder_3d: List[float],

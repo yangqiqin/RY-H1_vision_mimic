@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 arm_controller.py —— Aubo（遨博）K5 机械臂高层控制器（Windows 版）
 
@@ -53,6 +53,24 @@ def _rad2deg_list(vals) -> List[float]:
     return [math.degrees(v) for v in vals]
 
 
+# ---------------------------------------------------------------------------
+# 限流日志：同一 tag 的错误/警告每 period 秒至多打印一次（防"32601 不支持"类
+# 高频 RPC 失败把日志台刷爆）
+# ---------------------------------------------------------------------------
+_RL_LAST: dict = {}
+
+
+def _rl_warn(logger_: logging.Logger, tag: str, msg: str, period: float = 30.0,
+             first_error: bool = True):
+    import time as _t
+    now = _t.time()
+    if _RL_LAST.get(tag, 0.0) + period >= now:
+        return
+    _RL_LAST[tag] = now
+    (logger_.error if first_error else logger_.warning)("%s: %s", tag, msg)
+
+
+
 class AuboK5ArmController:
     """Aubo K5 机械臂控制器（Windows，pyaubo_sdk RPC）。"""
 
@@ -99,6 +117,12 @@ class AuboK5ArmController:
         self._robot_config = None
         self._io_control = None
         self._robot_algorithm = None
+        self._runtime_machine = None
+        self._last_collision_error = ""    # 最近一次碰撞盒操作错误详情
+        # 能力熔断：固件不支持的 RPC（如 getJointTorques 32601）连续失败后自动禁用，
+        # 避免每帧重试刷屏/拖慢
+        self._torque_ok = True
+        self._torque_fail = 0
 
     # ==================================================================
     # 连接 / 断开
@@ -153,14 +177,22 @@ class AuboK5ArmController:
         self._robot_config = ri.getRobotConfig()
         self._io_control = ri.getIoControl()
         self._robot_algorithm = ri.getRobotAlgorithm()
+        # 运行时机器（碰撞盒/非阻塞运动等需要 RTM 已启动）
+        try:
+            self._runtime_machine = client.getRuntimeMachine()
+        except Exception as exc:
+            logger.warning("[arm] getRuntimeMachine: %s", exc)
+            self._runtime_machine = None
 
         # 应用速度比例与 TCP 偏移
         try:
             self._motion_control.setSpeedFraction(self.speed_fraction)
         except Exception as exc:
-            logger.warning("[arm] setSpeedFraction 失败: %s", exc)
+            _rl_warn(logger, "setSpeedFraction", str(exc))
         self.apply_tcp_offset()
 
+        self._torque_ok = True
+        self._torque_fail = 0
         logger.info("[arm] 已连接并登录: %s (%s:%d)", self._robot_name, self.ip, self.rpc_port)
         return True
 
@@ -189,6 +221,7 @@ class AuboK5ArmController:
         self._robot_config = None
         self._io_control = None
         self._robot_algorithm = None
+        self._runtime_machine = None
         self._robot_name = None
         logger.info("[arm] 已断开")
 
@@ -261,30 +294,67 @@ class AuboK5ArmController:
         try:
             return self._robot_state.isSteady()
         except Exception as exc:
-            logger.warning("[arm] isSteady: %s", exc)
+            _rl_warn(logger, "isSteady", str(exc))
             return None
 
     def is_within_safety_limits(self) -> Optional[bool]:
         try:
             return self._robot_state.isWithinSafetyLimits()
         except Exception as exc:
-            logger.warning("[arm] isWithinSafetyLimits: %s", exc)
+            _rl_warn(logger, "isWithinSafetyLimits", str(exc))
             return None
+
+    def _sane_joints(self, q) -> Optional[List[float]]:
+        """关节角合理性校验（弧度，6 维）。异常返回 None（调用方按"读不到"处理）。"""
+        if q is None or len(q) < 6:
+            return None
+        try:
+            vals = [float(v) for v in q[:6]]
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(v) for v in vals):
+            return None
+        if any(abs(v) > 2 * math.pi + 0.5 for v in vals):
+            logger.warning("[arm] 关节角读数异常(超出±2π): %s", vals)
+            return None
+        return vals
+
+    def _sane_pose(self, pose) -> Optional[List[float]]:
+        """位姿合理性校验（位置米/旋转弧度，6 维）。
+
+        位置分量 |·| > 3m 即疑似"厘米被当米/单位错误/读数异常" → 返回 None，
+        防止把荒谬读数喂给安全框/手眼标定导致误判或危险动作。
+        """
+        if pose is None or len(pose) < 6:
+            return None
+        try:
+            vals = [float(v) for v in pose[:6]]
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(v) for v in vals):
+            return None
+        if any(abs(v) > 3.0 for v in vals[:3]):
+            logger.warning("[arm] 位姿位置读数异常(疑似单位错误/cm被当m): %s", vals[:3])
+            return None
+        if any(abs(v) > 2 * math.pi + 0.5 for v in vals[3:6]):
+            logger.warning("[arm] 位姿旋转读数异常(超出±2π): %s", vals[3:6])
+            return None
+        return vals
 
     def get_joint_positions(self) -> Optional[List[float]]:
         """当前关节角（弧度，6 维）。"""
         try:
-            return list(self._robot_state.getJointPositions())
+            return self._sane_joints(self._robot_state.getJointPositions())
         except Exception as exc:
-            logger.warning("[arm] getJointPositions: %s", exc)
+            _rl_warn(logger, "getJointPositions", str(exc))
             return None
 
     def get_tcp_pose(self) -> Optional[List[float]]:
         """当前 TCP 位姿 [x,y,z,rx,ry,rz]（米/弧度，含 TCP 偏移）。"""
         try:
-            return list(self._robot_state.getTcpPose())
+            return self._sane_pose(self._robot_state.getTcpPose())
         except Exception as exc:
-            logger.warning("[arm] getTcpPose: %s", exc)
+            _rl_warn(logger, "getTcpPose", str(exc))
             return None
 
     def get_flange_pose(self) -> Optional[List[float]]:
@@ -294,9 +364,9 @@ class AuboK5ArmController:
         而不是含 TCP 偏移的 getTcpPose（那是灵巧手 TCP 位置，会引入偏移误差）。
         """
         try:
-            return list(self._robot_state.getToolPose())
+            return self._sane_pose(self._robot_state.getToolPose())
         except Exception as exc:
-            logger.warning("[arm] getToolPose: %s", exc)
+            _rl_warn(logger, "getToolPose", str(exc))
             return None
 
     def get_state_summary(self) -> dict:
@@ -310,6 +380,56 @@ class AuboK5ArmController:
             "tcp_pose": self.get_tcp_pose(),
             "speed_fraction": self.get_speed_fraction(),
         }
+
+    # ---- 碰撞/受阻检测数据（眼在手上安全用） ----
+    def get_joint_torques(self) -> Optional[List[float]]:
+        """关节力矩（N·m，6 维）。碰撞时力矩会异常增大。
+
+        ★ 固件不支持(32601)时熔断：连续失败 3 次后本连接期内不再重试（返回 None），
+        只打一次错误，避免跟随每帧重试把日志台刷爆。
+        """
+        if not self._torque_ok:
+            return None
+        try:
+            return list(self._robot_state.getJointTorques())
+        except Exception as exc:
+            self._torque_fail += 1
+            if self._torque_fail == 1:
+                _rl_warn(logger, "getJointTorques(固件不支持?)", str(exc))
+            if self._torque_fail >= 3:
+                self._torque_ok = False
+                logger.warning("[arm] 力矩读取连续失败，已在本连接内禁用（返回 None）")
+            return None
+
+    def get_joint_currents(self) -> Optional[List[float]]:
+        """关节电流（A，6 维）。受阻时电流增大。"""
+        try:
+            return list(self._robot_state.getJointCurrents())
+        except Exception as exc:
+            _rl_warn(logger, "getJointCurrents", str(exc))
+            return None
+
+    def hard_stop(self, retries: int = 5, delay_s: float = 0.05) -> bool:
+        """【硬停止】多次调用 stopMove 直到确认停止（安全关键）。
+
+        碰撞/异常/急停时用：SDK 忙或运动队列未清空时单次 stopMove 可能失败，
+        重试直到 is_steady() 为 True 或达到重试上限。
+        """
+        for i in range(max(1, retries)):
+            try:
+                self._motion_control.stopMove()
+            except Exception as exc:
+                logger.error("[arm] hard_stop 第%d次 stopMove 异常: %s", i + 1, exc)
+            time.sleep(delay_s)
+            try:
+                steady = self._robot_state.isSteady()
+                if steady:
+                    logger.warning("[arm] hard_stop 已确认停止（第%d次）", i + 1)
+                    return True
+            except Exception:
+                pass
+        logger.error("[arm] hard_stop 未能确认停止（仍可能运动中！）")
+        return False
 
     def get_speed_fraction(self) -> Optional[float]:
         try:
@@ -605,6 +725,208 @@ class AuboK5ArmController:
         except Exception as exc:
             logger.error("[arm] inverseKinematics: %s", exc)
             return None, -1
+
+    # ==================================================================
+    # 末端碰撞盒 / 安全包围盒（防相机·灵巧手剐蹭，SDK 硬件级碰撞保护）
+    # 依据 lib/auboDocument/index-碰撞.pdf：addCollisionBox(name, link_name, sizes, poses)
+    #   * link_name="end_effector" → 碰撞盒挂在末端，随末端运动
+    #   * 机械臂其它连杆/环境物体进入该盒 → SDK 碰撞保护（停止）
+    #   * sizes = [[长, 宽, 高]]（米）；poses = [[x,y,z,rx,ry,rz]] 相对末端位姿
+    # ==================================================================
+    def add_tool_collision_box(self, name: str = "tool_box",
+                               size: Optional[List[float]] = None,
+                               pose: Optional[List[float]] = None) -> int:
+        """在末端挂一个立方体碰撞盒（工具包络），随末端运动。
+
+        前置条件（addCollisionBox 是算法接口，需 RTM 运行）：
+          1. 确保 RuntimeMachine 已启动（203 AUBO_BADSTATE_RTM_NOT_STARTED）；
+          2. 确保机械臂 Running（212 AUBO_BADSTATE_ROBOT_NOT_RUNNING）；
+          3. 同名碰撞盒先删除（防重名冲突）。
+
+        Args:
+            name: 碰撞盒名（addCollisionBox 的 name）
+            size: [长, 宽, 高]（米）——包含相机 + 灵巧手 + 手指摆动空间
+            pose: [x,y,z,rx,ry,rz] 相对 end_effector 的位姿（米/弧度）
+
+        Returns:
+            0=成功；>0=AUBO 错误码；-1=异常
+        """
+        if self._robot_algorithm is None:
+            logger.warning("[arm] 算法接口未就绪（未连接）")
+            return -1
+
+        # 0) 先删除同名旧碰撞盒（防重名冲突，忽略删除失败）
+        try:
+            self._robot_algorithm.removeCollisionObject(name)
+        except Exception:
+            pass
+
+        # 1) 确保 RuntimeMachine 已启动（addCollisionBox 需要 RTM）
+        if getattr(self, "_runtime_machine", None) is not None:
+            try:
+                rt_state = self._runtime_machine.getRuntimeState()
+                # 若未启动则 start()
+                if not rt_state:
+                    self._runtime_machine.start()
+                    time.sleep(0.1)
+            except Exception as exc:
+                logger.warning("[arm] RTM 启动检查/启动: %s", exc)
+
+        # 2) 若机械臂未 Running（仅上电未启动），提示先 poweron_and_startup
+        try:
+            mode = str(self.get_robot_mode())
+            if mode and "Running" not in mode and "Idle" in mode:
+                logger.warning("[arm] 机械臂未进入 Running（当前 %s），碰撞盒可能添加失败。"
+                               "请先执行 上电+启动", mode)
+        except Exception:
+            pass
+
+        sz = [list(size)] if size else [[0.15, 0.12, 0.20]]
+        ps = [list(pose)] if pose else [[0.0, 0.0, 0.10, 0.0, 0.0, 0.0]]
+        try:
+            ret = self._robot_algorithm.addCollisionBox(name, "end_effector", sz, ps)
+            if ret == 0:
+                logger.info("[arm] ✅ 末端碰撞盒 %s 已添加（size=%s, pose=%s）", name, sz, ps)
+                self._last_collision_error = ""
+            else:
+                # AUBO 错误码中文提示（对照 dir(pyaubo_sdk) 的 AUBO_ 常量）
+                self._last_collision_error = self._aubo_error_text(ret)
+                logger.error("[arm] ❌ addCollisionBox ret=%d %s", ret,
+                             self._last_collision_error)
+            return ret
+        except Exception as exc:
+            # 记录详细异常（GUI 读取显示），返回 -1 表示异常
+            self._last_collision_error = f"调用异常: {type(exc).__name__}: {exc}"
+            logger.error("[arm] addCollisionBox 调用异常: %s", exc)
+            return -1
+
+    def get_last_collision_error(self) -> str:
+        """最近一次碰撞盒操作的具体错误（供 GUI 弹窗显示）。"""
+        return getattr(self, "_last_collision_error", "")
+
+    @staticmethod
+    def _aubo_error_text(ret: int) -> str:
+        """AUBO 返回码 → 中文解释（对照 pyaubo_sdk.AUBO_* 常量）。"""
+        import pyaubo_sdk as _s
+        mapping = {
+            0: "成功", 1: "状态错误(BAD_STATE)", 2: "队列已满(QUEUE_FULL)",
+            3: "忙(BUSY)", 4: "超时(TIMEOUT)", 5: "参数非法(INVL_ARGUMENT)",
+            6: "未实现", 7: "无权限(NO_ACCESS)", 8: "连接拒绝", 9: "连接重置",
+            10: "进行中(INPROGRESS)", 11: "IO错误", 12: "无缓冲", 13: "请求被忽略",
+            14: "算法规划失败", 15: "版本不兼容", 16: "维度错误", 17: "奇异点",
+            18: "位置越界", 19: "初始位置错误", 21: "轨迹生成失败",
+            22: "轨迹自碰撞(SELF_COLLISION)", 23: "逆解不收敛",
+            203: "运行时未启动(RTM_NOT_STARTED)——请先执行上电+启动",
+            210: "机器人模式无效(INVALID_ROBOT_MODE)",
+            212: "机器人未运行(ROBOT_NOT_RUNNING)——请先执行上电+启动",
+            213: "机器人未断电完成", 218: "机器人未停稳",
+            219: "拖拽示教激活中(FREE_DRIVE_ACTIVE)——请先关闭拖拽",
+            221: "仿真模式激活(SIMULATION_MODE_ACTIVE)",
+        }
+        if ret in mapping:
+            return mapping[ret]
+        try:
+            return str(_s.errorCode2Str(ret))
+        except Exception:
+            return f"未知错误码 {ret}"
+
+    def remove_tool_collision_box(self, name: str = "tool_box") -> int:
+        """删除末端碰撞盒。"""
+        if self._robot_algorithm is None:
+            return -1
+        try:
+            ret = self._robot_algorithm.removeCollisionObject(name)
+            logger.info("[arm] 碰撞盒 %s 已删除 ret=%s", name, ret)
+            return ret
+        except Exception as exc:
+            logger.error("[arm] removeCollisionObject 失败: %s", exc)
+            return -1
+
+    # ==================================================================
+    # 基座坐标系安全长方体（WorldZone，固定区域：保护桌面/障碍物）
+    # ==================================================================
+    def set_world_zone(self, base_vertex: List[float], opposite_vertex: List[float],
+                       enabled: bool = True, outside: bool = True,
+                       margin: float = 0.01, tool_radius: float = 0.05,
+                       brake_margin: float = 0.02, zone_id: int = 1) -> int:
+        """设置基座系安全长方体（WorldZone）。
+
+        Args:
+            base_vertex: 长方体一角 [x,y,z]（基座系，米）
+            opposite_vertex: 对角 [x,y,z]
+            enabled: 是否启用
+            outside: False=腔内危险(TCP进入→停), True=腔外危险(内缩成禁区保护桌面)
+            margin: 工艺余量（米）
+            tool_radius: 工具包络半径（米）
+            brake_margin: 制动距离余量（米），启用时必须>0
+        """
+        if self._io_control is None:
+            logger.warning("[arm] IO 接口未就绪")
+            return -1
+        try:
+            import pyaubo_sdk
+            wz = pyaubo_sdk.WorldZone()
+            wz.id = int(zone_id)
+            wz.enabled = bool(enabled)
+            wz.outside = bool(outside)
+            wz.base_vertex = [float(v) for v in base_vertex]
+            wz.opposite_vertex = [float(v) for v in opposite_vertex]
+            wz.margin = float(margin)
+            wz.tool_radius = float(tool_radius)
+            wz.brake_margin = float(brake_margin)
+            ret = self._io_control.setWorldZone(wz)
+            logger.info("[arm] WorldZone%d 设置: base%s opp%s outside=%s ret=%s",
+                        zone_id, base_vertex, opposite_vertex, outside, ret)
+            return ret
+        except Exception as exc:
+            _rl_warn(logger, "setWorldZone", str(exc))
+            return -1
+
+    def get_world_zone_state(self) -> dict:
+        """读取 WorldZone 运行状态（TCP 是否进入/阻塞）。"""
+        if self._io_control is None:
+            return {}
+        try:
+            st = self._io_control.getWorldZoneState()
+            return {
+                "any_occupied": bool(getattr(st, "any_occupied", False)),
+                "holding": bool(getattr(st, "holding", False)),
+                "blocking": bool(getattr(st, "blocking", False)),
+                "blocking_ids": list(getattr(st, "blocking_ids", [])),
+            }
+        except Exception as exc:
+            logger.warning("[arm] getWorldZoneState: %s", exc)
+            return {}
+
+    def enable_table_protect_zone(self, floor_z: float = 0.13,
+                                  zone_id: int = 1) -> Tuple[int, str]:
+        """启用【桌面/地面危险腔】WorldZone（腔内危险：末端 z<floor_z 即 SDK 停机）。
+
+        用途：作为 addCollisionBox 固件不支持(32601)时的硬件级替代——
+        把"桌面以下空间"定义为危险腔，末端一旦下沉超过 floor_z（基座系米）即保护停机。
+        xy 不限制（不误伤转向/平移）；上方不限制。
+        """
+        try:
+            ret = self.set_world_zone(
+                base_vertex=[-10.0, -10.0, -10.0],
+                opposite_vertex=[10.0, 10.0, max(0.02, floor_z)],
+                enabled=True, outside=False,      # 腔内危险：进入 z<floor_z 区域即触发
+                margin=0.0, tool_radius=0.03, brake_margin=0.02,
+                zone_id=zone_id)
+            if ret == 0:
+                return 0, f"WorldZone 桌面危险腔已启用（z<{floor_z:.2f}m 停机保护）"
+            return ret, f"WorldZone 设置失败 ret={ret}（见日志）"
+        except Exception as exc:
+            logger.error("[arm] enable_table_protect_zone 异常: %s", exc)
+            return -1, f"WorldZone 异常: {exc}"
+
+    def disable_world_zone(self, zone_id: int = 1) -> int:
+        """停用指定 WorldZone。"""
+        return self.set_world_zone(
+            base_vertex=[0.0, 0.0, 0.0],
+            opposite_vertex=[1.0, 1.0, 1.0],
+            enabled=False, outside=False, margin=0.0,
+            tool_radius=0.03, brake_margin=0.02, zone_id=zone_id)
 
     # ==================================================================
     # 工具

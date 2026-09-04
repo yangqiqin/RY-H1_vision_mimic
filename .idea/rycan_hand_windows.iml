@@ -15,6 +15,7 @@
       <sourceFolder url="file://$MODULE_DIR$/lib/pcan" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/lib/thesis" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/lib/参考代码" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/cpp_src" isTestSource="false" />
     </content>
     <orderEntry type="jdk" jdkName="E:\pythonProject\python3.10.11\python.exe" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

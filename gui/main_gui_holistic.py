@@ -163,7 +163,11 @@ class MainGuiHolistic(MainGuiArm):
             try:
                 self.holistic = HolisticPoseEstimator(hand_side=self.holistic_side_var.get())
                 self.holistic_running = True
-                self.holistic_state_var.set("协同运行中（检测人体+手）")
+                # ★ holistic 已含手部检测 → 停用旧 hand 检测(est)与"动作模仿"，避免双算法打架
+                self._suppress_legacy_hand = True
+                if "mimic_on" in self.checkbox_vars:
+                    self.checkbox_vars["mimic_on"].set(False)
+                self.holistic_state_var.set("协同运行中（人体+手=Holistic 单一检测）")
             except Exception as exc:
                 messagebox.showerror("Holistic 启动失败", str(exc))
                 self.holistic = None
@@ -179,6 +183,9 @@ class MainGuiHolistic(MainGuiArm):
                 pass
         self.holistic = None
         self.holistic_running = False
+        # 恢复旧 hand 检测可用（用户可再勾选动作模仿）
+        if hasattr(self, "_suppress_legacy_hand"):
+            self._suppress_legacy_hand = False
         self.holistic_state_var.set("协同未启动")
 
     def _holistic_apply_flags(self):
@@ -264,12 +271,28 @@ class MainGuiHolistic(MainGuiArm):
         # ---- 灵巧手跟随（手→16角，独立于父类 mimic 开关，避免双重下发）----
         if self.holistic_hand_follow_var.get() and r.hand_detected:
             if self.hand is not None and not self.checkbox_vars["mimic_on"].get():
-                try:
-                    angles_rad = [math.radians(a) for a in r.hand_angles_deg]
-                    self.hand.move_joints(angles_rad)
-                except Exception as exc:
-                    self.holistic_status_var.set(f"手跟随异常: {exc}")
+                angles_rad = [math.radians(a) for a in r.hand_angles_deg]
+                self._send_hand_joints(angles_rad)
         return r
+
+    def _send_hand_joints(self, angles_rad) -> bool:
+        """灵巧手动作模仿下发（带异常熔断：连续失败暂停 1s，防 PCAN 异常风暴/卡退）。"""
+        if self.hand is None:
+            return False
+        now = time.time()
+        if now < getattr(self, "_hand_pause_until", 0.0):
+            return False
+        try:
+            self.hand.move_joints(list(angles_rad))
+            self._hand_fail_streak = 0
+            return True
+        except Exception as exc:
+            self._hand_fail_streak = getattr(self, "_hand_fail_streak", 0) + 1
+            if self._hand_fail_streak >= 3:
+                self._hand_pause_until = now + 1.0
+                self._hand_fail_streak = 0
+                self.holistic_status_var.set(f"灵巧手下发连续失败，暂停1s重试: {exc}")
+            return False
 
     def _holistic_poll_loop(self):
         """常驻调度（防止 after 链因异常中断）。"""

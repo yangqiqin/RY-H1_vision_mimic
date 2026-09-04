@@ -134,23 +134,26 @@ class HandEyeCalibration:
         return np.dot(R_gripper2base, P_gripper) + end_position
 
     # ------------------------------------------------------------------
-    def camera_to_base(self, P_cam: np.ndarray, arm) -> np.ndarray:
+    def camera_to_base(self, P_cam: np.ndarray, arm,
+                       flange_pose: Optional[List[float]] = None) -> np.ndarray:
         """相机系点 → 基座系点（②+③+④）。
 
         Args:
             P_cam: 相机系 3D 坐标（米）
-            arm: 机械臂控制器实例（优先用 get_flange_pose()——法兰位姿，相机装在法兰上；
-                 若无则回退 get_tcp_pose()）
+            arm: 机械臂控制器实例（仅在 flange_pose 未给时读取位姿）
+            flange_pose: 可选——调用方已读到的当前【法兰】位姿 [x,y,z,rx,ry,rz]。
+                         ★ 传入后不再重复 RPC 读位姿（眼在手上跟随每帧调用多次本方法，
+                         复用一次读数可显著降低机械臂 RPC 开销、改善实时性）
         """
         P_gripper = self.cam_to_gripper(P_cam)
         # ③ 读取当前【法兰】位姿（手眼标定必须用法兰系：相机装在法兰盘上，
         #    不能用含 TCP 偏移的 getTcpPose，否则引入灵巧手安装偏移误差）
-        if hasattr(arm, "get_flange_pose"):
-            pose = arm.get_flange_pose()
-        elif hasattr(arm, "get_tcp_pose"):
-            pose = arm.get_tcp_pose()
-        else:
-            pose = None
+        pose = flange_pose
+        if pose is None:
+            if hasattr(arm, "get_flange_pose"):
+                pose = arm.get_flange_pose()
+            elif hasattr(arm, "get_tcp_pose"):
+                pose = arm.get_tcp_pose()
         if pose is None:
             raise RuntimeError("无法读取机械臂当前法兰位姿（get_flange_pose 失败）")
         end_pos = np.array(pose[:3], dtype=np.float64)

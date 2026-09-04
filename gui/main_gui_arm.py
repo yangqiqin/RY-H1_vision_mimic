@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+import logging
 
 # ---- 路径引导 ----
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -32,6 +33,8 @@ from tkinter import ttk, messagebox
 from gui.main_gui import MainGui, JOINT_NAMES_CN
 from arm import AuboK5ArmController
 from arm.arm_config import ARM_CONFIG, DOF, JOINT_RANGE_DEG, JOINT_STEP_DEG
+
+logger = logging.getLogger("main_gui_arm")
 
 
 class MainGuiArm(MainGui):
@@ -52,6 +55,8 @@ class MainGuiArm(MainGui):
         self.arm: AuboK5ArmController | None = None
         self.arm_connected = False
         self.arm_state_var = tk.StringVar(value="机械臂未连接")
+        self._pose_locked = False           # 姿态是否已锁定（movel 强制保持朝向）
+        self._locked_rpy = [math.pi, 0.0, -0.436]   # 锁定姿态默认值（法兰 RPY）
 
         # 6. 创建机械臂面板（底部 Notebook）
         self._build_arm_ui()
@@ -240,7 +245,6 @@ class MainGuiArm(MainGui):
             self.arm_joint_vars.append(var)
             ttk.Label(row, textvariable=var, width=8, font=("Consolas", 8)).pack(side="left")
 
-            # ========== 关键修改：滑条范围从 JOINT_RANGE_DEG 读取 ==========
             lo, hi = JOINT_RANGE_DEG[i]
             tk.Scale(row, from_=lo, to=hi, resolution=1, orient=tk.HORIZONTAL,
                      variable=var, length=180, showvalue=False).pack(side="left", padx=2)
@@ -270,10 +274,27 @@ class MainGuiArm(MainGui):
             var = tk.StringVar(value="0.0")
             self.arm_pose_vars.append(var)
             ttk.Entry(rp, textvariable=var, width=8).pack(side="left", padx=1)
+
         rpb = ttk.Frame(right)
         rpb.pack(fill="x", padx=4, pady=2)
         ttk.Button(rpb, text="执行 movel", command=self._arm_movel_from_entry).pack(side="left", padx=2)
         ttk.Button(rpb, text="读当前位姿填充", command=self._arm_read_pose_fill).pack(side="left", padx=2)
+
+        # ★★★ 新增：锁定当前姿态按钮 ★★★
+        lock_btn = tk.Button(
+            rpb,
+            text="锁定当前姿态",
+            command=self._arm_lock_current_pose,
+            bg="lightgreen",
+            fg="black",
+            font=("", 9, "bold")
+        )
+        lock_btn.pack(side="left", padx=4)
+        unlock_btn = tk.Button(
+            rpb, text="解除锁定", command=self._arm_unlock_pose,
+            bg="lightcoral", fg="black", font=("", 9, "bold")
+        )
+        unlock_btn.pack(side="left", padx=2)
 
         # 位置微调（x/y/z 与姿态 ±）
         rpc = ttk.Frame(right)
@@ -300,6 +321,144 @@ class MainGuiArm(MainGui):
         ttk.Button(rh, text="到位后握拳", command=self._arm_hand_link_fist).pack(side="left", padx=2)
         ttk.Button(rh, text="到位后张开", command=self._arm_hand_link_open).pack(side="left", padx=2)
         ttk.Button(rh, text="到位后放松", command=self._arm_hand_link_relax).pack(side="left", padx=2)
+
+        # ============================================================
+        # ★★★ 末端安全碰撞盒（SDK 级保护：防相机/灵巧手剐蹭）★★★
+        # 依据 lib/auboDocument/index-碰撞.pdf：
+        #   addCollisionBox(name, "end_effector", [[长,宽,高]], [[x,y,z,rx,ry,rz]])
+        #   → 在末端挂一个随动的长方体，机械臂其它连杆/环境进入 → SDK 碰撞保护
+        # ============================================================
+        rt = ttk.LabelFrame(right, text="末端安全碰撞盒（保护相机+灵巧手，单位 cm）")
+        rt.pack(fill="x", padx=4, pady=2)
+        sub_t1 = ttk.Frame(rt)
+        sub_t1.pack(fill="x", padx=2, pady=1)
+        ttk.Label(sub_t1, text="长×宽×高(cm):").pack(side="left")
+        self.tool_box_size_vars = []
+        # 默认：相机(~8cm) + 灵巧手(~15cm) + 手指摆动空间，稍放大留余量
+        for default_cm in (20, 16, 25):
+            var = tk.StringVar(value=str(default_cm))
+            self.tool_box_size_vars.append(var)
+            ttk.Entry(sub_t1, textvariable=var, width=5).pack(side="left", padx=1)
+        ttk.Label(sub_t1, text=" 相对末端 z(cm):").pack(side="left", padx=(8, 0))
+        self.tool_box_z_var = tk.StringVar(value="10")
+        ttk.Entry(sub_t1, textvariable=self.tool_box_z_var, width=5).pack(side="left", padx=1)
+        ttk.Button(sub_t1, text="启用碰撞盒", command=self._arm_enable_tool_box).pack(side="left", padx=4)
+        ttk.Button(sub_t1, text="停用", command=self._arm_disable_tool_box).pack(side="left", padx=2)
+
+    def _arm_enable_tool_box(self):
+        """启用末端碰撞盒（addCollisionBox on end_effector，SDK 级防剐蹭）。"""
+        if not self._require_arm():
+            return
+        try:
+            size_cm = [float(v.get()) for v in self.tool_box_size_vars]
+            z_cm = float(self.tool_box_z_var.get())
+        except ValueError:
+            messagebox.showerror("输入错误", "尺寸必须是数字（厘米）")
+            return
+        size_m = [v / 100.0 for v in size_cm]
+        z_m = z_cm / 100.0
+        # 相对 end_effector 的位姿：盒子中心在末端前方 z_m 处
+        pose = [0.0, 0.0, z_m, 0.0, 0.0, 0.0]
+
+        # ★ 优先走 C++ Socket 服务（Python pyaubo-sdk 无法调用 addCollisionBox → 32601，
+        #   由 C++ 服务端直连遨博 C++ SDK 调用）
+        try:
+            from arm.collision_box_client import (
+                start_cpp_collision_server, get_collision_client)
+            rob_ip = getattr(self.arm, "ip", None) if self.arm is not None else None
+            if start_cpp_collision_server(timeout=2.0, robot_ip=rob_ip):
+                resp = get_collision_client().add_collision_box(
+                    "tool_box", "end_effector", size_m, pose)
+                if resp.get("status") == "ok":
+                    mode = resp.get("mode", "sdk")
+                    if mode == "sdk":
+                        self.arm_state_var.set(
+                            f"✅ 末端碰撞盒已启用(C++ SDK): {size_cm[0]:.0f}×{size_cm[1]:.0f}"
+                            f"×{size_cm[2]:.0f}cm (z+{z_cm:.0f}cm)")
+                    else:
+                        # addCollisionBox 固件不支持(32601，C++ 同 RPC 也一样) →
+                        # 尝试真实硬件级替代：WorldZone 桌面危险腔
+                        try:
+                            if hasattr(self.arm, "enable_table_protect_zone"):
+                                wret, wnote = self.arm.enable_table_protect_zone(floor_z=0.13)
+                                if wret == 0:
+                                    self.arm_state_var.set(
+                                        f"（addCollisionBox 固件不支持 → ✅ {wnote}）")
+                                else:
+                                    self.arm_state_var.set(
+                                        f"（碰撞盒固件不支持，WorldZone 失败：{wnote} "
+                                        f"→ 软件安全链兜底）")
+                            else:
+                                self.arm_state_var.set(
+                                    "（碰撞盒固件不支持且无 WorldZone 接口 → 软件安全链兜底）")
+                        except Exception as wexc:
+                            self.arm_state_var.set(f"（WorldZone 异常: {wexc} → 软件链兜底）")
+                    return
+        except Exception as e:
+            print(f"Socket 碰撞盒失败，回退 Python SDK: {e}")
+
+        ret = self.arm.add_tool_collision_box("tool_box", size_m, pose)
+        if ret == 0:
+            self.arm_state_var.set(
+                f"✅ 末端碰撞盒已启用: {size_cm[0]:.0f}×{size_cm[1]:.0f}×{size_cm[2]:.0f}cm "
+                f"(z+{z_cm:.0f}cm)，机械臂/环境进入即碰撞保护")
+        else:
+            # 读取具体错误（含异常详情）
+            detail = f"addCollisionBox ret={ret}"
+            if hasattr(self.arm, "get_last_collision_error"):
+                err = self.arm.get_last_collision_error()
+                if err:
+                    detail = err
+            # 若固件不支持 addCollisionBox(32601 method not found)，尝试 WorldZone 兜底
+            fallback_note = ""
+            if "32601" in detail or "method not found" in detail.lower():
+                try:
+                    # 用 WorldZone 保护基座前方工作区（桌面），software 层兜底
+                    wret = self.arm.set_world_zone(
+                        base_vertex=[0.0, -0.45, 0.0],
+                        opposite_vertex=[1.0, 0.45, 0.20],
+                        enabled=True, outside=True,
+                        margin=0.01, tool_radius=0.05, brake_margin=0.02)
+                    if wret == 0:
+                        fallback_note = "\n\n已自动改用 WorldZone 保护工作台区域（防碰桌面）。\n" \
+                                        "（本固件不支持末端随动碰撞盒 addCollisionBox）"
+                        self.arm_state_var.set("WorldZone 桌面保护已启用（addCollisionBox 固件不支持）")
+                except Exception as w_exc:
+                    fallback_note = f"\n\nWorldZone 也失败: {w_exc}"
+            messagebox.showerror(
+                "启用失败",
+                f"{detail}{fallback_note}\n\n"
+                f"提示：\n"
+                f"· 机械臂未进入 Running（先点【上电+启动】）\n"
+                f"· 拖拽示教还开着（先关【拖拽示教】）\n"
+                f"· 部分固件不支持 addCollisionBox（32601），已尝试 WorldZone 兜底")
+
+    def _arm_disable_tool_box(self):
+        """停用末端碰撞盒/WorldZone（优先走 C++ Socket 服务）。"""
+        if not self._require_arm():
+            return
+        # ★ 优先走 C++ Socket 移除
+        try:
+            from arm.collision_box_client import get_collision_client
+            resp = get_collision_client().remove_collision_box("tool_box")
+            if resp.get("status") == "ok":
+                self.arm_state_var.set(f"末端碰撞盒已停用(ret=0, mode={resp.get('mode')})")
+                # 同时关闭可能启用的 WorldZone
+                try:
+                    if hasattr(self.arm, "disable_world_zone"):
+                        self.arm.disable_world_zone()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        ret = self.arm.remove_tool_collision_box("tool_box")
+        try:
+            if hasattr(self.arm, "disable_world_zone"):
+                self.arm.disable_world_zone()
+        except Exception:
+            pass
+        self.arm_state_var.set(f"末端碰撞盒/WorldZone 已停用 ret={ret}")
 
     def _add_pose_nudge(self, parent, idx: int, minus_text: str, plus_text: str, is_pos: bool):
         """位姿微调按钮（位置步长 1cm / 姿态步长 0.05rad）。"""
@@ -406,6 +565,54 @@ class MainGuiArm(MainGui):
         ret, msg = self.arm.move_home(block=True)
         self.arm_state_var.set(f"回初始位 ret={ret} {msg or ''}")
 
+    def _arm_lock_current_pose(self):
+        """
+        把当前【法兰】姿态锁定为协同跟随的固定姿态。
+        读取机械臂当前位姿中的 [rx, ry, rz] 存入 self._locked_rpy 并置 _pose_locked=True，
+        后续所有 movel 入口（_arm_movel_from_entry / _arm_hand_link）会强制替换姿态为锁定值，
+        保证末端朝向（相机+灵巧手）始终不变。
+        """
+        if not self._require_arm():
+            return
+
+        # 用法兰位姿（不含 TCP 偏移，与手眼标定/安全检测一致）
+        if hasattr(self.arm, "get_flange_pose"):
+            pose = self.arm.get_flange_pose()
+        else:
+            pose = self.arm.get_tcp_pose()
+        if pose is None:
+            messagebox.showerror("读取失败", "无法获取当前位姿，请检查机械臂连接")
+            return
+
+        # 提取姿态部分 [rx, ry, rz] 并保存锁定状态
+        locked_rpy = pose[3:6]
+        self._locked_rpy = [float(v) for v in locked_rpy]
+        self._pose_locked = True
+
+        # 同步给 ArmFollower（若已启用协同）
+        if hasattr(self, 'follower') and self.follower is not None:
+            try:
+                self.follower.update_calib(fixed_rpy=locked_rpy)
+            except Exception:
+                pass
+
+        self.arm_state_var.set(
+            f"✅ 姿态已锁定: [{self._locked_rpy[0]:.3f}, {self._locked_rpy[1]:.3f}, "
+            f"{self._locked_rpy[2]:.3f}] rad（后续 movel 保持该朝向）"
+        )
+        logger.info("[arm] 锁定姿态: %s", [round(v, 4) for v in self._locked_rpy])
+
+    def _arm_unlock_pose(self):
+        """解除姿态锁定（movel 恢复使用输入框的姿态）。"""
+        self._pose_locked = False
+        self.arm_state_var.set("姿态锁定已解除（movel 用输入框姿态）")
+
+    def _apply_locked_rpy(self, pose: list) -> list:
+        """若已锁定姿态，把 pose 的旋转部分替换为锁定值（只移动 xyz）。"""
+        if getattr(self, "_pose_locked", False) and hasattr(self, "_locked_rpy"):
+            return list(pose[:3]) + list(self._locked_rpy)
+        return list(pose)
+
     def _arm_movej_from_sliders(self):
         if not self._require_arm():
             return
@@ -489,6 +696,8 @@ class MainGuiArm(MainGui):
         except ValueError:
             messagebox.showerror("输入错误", "位姿必须是数字 [x,y,z,rx,ry,rz]")
             return
+        # 若已锁定姿态 → 强制替换旋转部分（末端朝向不变，只移动 xyz）
+        pose = self._apply_locked_rpy(pose)
         ret, msg = self.arm.movel(pose, block=True, timeout_s=30)
         self.arm_state_var.set(f"movel ret={ret} {msg or ''}")
         self._arm_refresh_state()
@@ -522,6 +731,7 @@ class MainGuiArm(MainGui):
         except ValueError:
             messagebox.showerror("输入错误", "位姿必须是数字")
             return
+        pose = self._apply_locked_rpy(pose)   # 若姿态已锁定则强制替换旋转部分
         if not messagebox.askyesno("臂手联动", f"机械臂 movel 到位后执行『{hand_action}』，确认？"):
             return
         ret, msg = self.arm.movel(pose, block=True, timeout_s=30)

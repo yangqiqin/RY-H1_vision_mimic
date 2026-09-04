@@ -1,0 +1,215 @@
+
+===== start 2026-09-04 21:43:00 =====
+[C++] collision box server mode=mock port=9999 robot_ip=192.168.1.100
+[C++] socket server listening on port 9999
+[C++] DEMO MODE: not linked to real aubo SDK (mode=mock)
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: [C++] DEMO MODE: not linked to real aubo SDK (mode=mock)
+ionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: [C++] DEMO MODE: not linked to real aubo SDK (mode=mock)
+d": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[C++] req: {"command": "ping"}
+[C++] resp: {"status":"pong"}
+[mock] addCollisionBox(tool_box,end_effector)
+0.2 0.16 0.25  | 0 0 0.1 0 0 0 
+[C++] req: {"command": "add", "name": "tool_box", "link": "end_effector", "sizes": [0.2, 0.16, 0.25], "poses": [0.0, 0.0, 0.1, 0.0, 0.0, 0.0]}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}
+[mock] removeCollisionObject(tool_box)
+[C++] req: {"command": "remove", "name": "tool_box"}
+[C++] resp: {"status":"ok","ret":0,"mode":"mock"}

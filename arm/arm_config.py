@@ -26,7 +26,7 @@ ARM_CONFIG = {
     "rpc_timeout_ms": 1000,     # RPC 请求超时（毫秒）
 
     # ---- 运动默认参数 ----
-    "speed_fraction": 0.3,      # 全局速度比例 0~1（安全起步，官方示例用 0.75）
+    "speed_fraction": 0.15,      # 全局速度比例 0~1（安全起步，官方示例用 0.75）
     "joint_speed": 40.0,        # moveJoint 关节速度上限（度/秒，内部转弧度）
     "joint_acc": 30.0,          # moveJoint 关节加速度上限（度/秒²）
     "line_speed": 0.4,          # moveLine 末端线速度（米/秒）

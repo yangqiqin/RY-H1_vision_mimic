@@ -240,6 +240,7 @@ class HolisticPoseEstimator:
             intrinsics: Optional[dict] = None,
             map_to_arm: bool = False,
             arm_mapper=None,
+            max_infer_w: int = 704,
     ) -> List[HolisticResult]:
         """
         处理一帧：检测人体 + 双手，解算手部 16 关节角，可选映射机械臂 TCP。
@@ -250,17 +251,28 @@ class HolisticPoseEstimator:
             intrinsics: 相机内参 {fx,fy,ppx,ppy}（可选）
             map_to_arm: 是否把腕部 3D 映射为机械臂 TCP（需 arm_mapper）
             arm_mapper: arm/arm_follow.py 的映射器（callable: wrist_3d -> pose6）
+            max_infer_w: ★ 推理图最大宽度（默认 704）。输入更宽时先等比缩小再送模型，
+                推理耗时约降 4 倍；landmark 为归一化坐标，3D 仍按原图宽高/深度换算，精度无损。
         """
         if rgb_bgr is None:
             return []
 
-        # ===== 诊断：打印图像信息 =====
-        logger.info(f"[Holistic] 输入图像: shape={rgb_bgr.shape}, dtype={rgb_bgr.dtype}")
         h, w = rgb_bgr.shape[:2]
         if h < 200 or w < 200:
             logger.warning(f"[Holistic] 图像尺寸过小 ({w}x{h})，建议 >=480x480")
 
-        rgb = bgr2rgb(rgb_bgr)
+        infer = rgb_bgr
+        if w > max_infer_w:
+            try:
+                import cv2
+                nw = int(max_infer_w)
+                nh = max(1, int(round(h * nw / w)))
+                infer = cv2.resize(rgb_bgr, (nw, nh),
+                                   interpolation=cv2.INTER_AREA)
+            except Exception:
+                pass
+
+        rgb = bgr2rgb(infer)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB,
                             data=np.ascontiguousarray(rgb))
 
@@ -270,16 +282,13 @@ class HolisticPoseEstimator:
             logger.error(f"[Holistic] detect() 异常: {e}")
             return []
 
-        # ===== 诊断：检测结果标志 =====
         has_pose = res.pose_landmarks is not None
         has_left = res.left_hand_landmarks is not None
         has_right = res.right_hand_landmarks is not None
-        logger.info(f"[Holistic] 检测结果: pose={has_pose}, left={has_left}, right={has_right}")
 
         out: List[HolisticResult] = []
         r = HolisticResult()
         if not has_pose and not (has_left or has_right):
-            logger.warning("[Holistic] 未检测到任何关键点！请检查：光照、距离、是否全身入镜")
             return out
 
         # ---- 以下为原处理逻辑（完全不变） ----
