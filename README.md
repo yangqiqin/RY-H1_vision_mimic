@@ -1,4 +1,4 @@
-# 睿研 RY-H1(16) 灵巧手 + Aubo K5 机械臂 · Windows 视觉动作模仿（模块化可单项验证）
+# 睿研 RY-H1(16) 灵巧手 + Aubo K5 机械臂 · Windows 视觉动作模仿
 
 > **依据**：《睿研灵巧的SDK入门指南》V1.01（知识库）、官方 demo（`RyHandLibCANII_rs485_pcan_16.py`、`RyHandLibPCAN_windows16.cpp`、`RyHandLib.h`）、RY-H1(16) 手册、
 > 遨博官方文档（`lib/auboDocument/`）+ SDK Python 示例（`lib/aubo_sdk-0.27.1-rc.4-Windows_AMD64+b46f170/share/example/python/`）。
