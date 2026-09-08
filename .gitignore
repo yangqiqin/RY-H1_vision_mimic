@@ -1,0 +1,33 @@
+# 编译输出和可执行文件（不要提交 .exe）
+*.exe
+/bin/
+/build/
+*.o
+*.obj
+*.pyc
+__pycache__/
+
+# 第三方库和依赖（除非是自己写的库，否则忽略）
+/lib/
+/lib64/
+/venv/
+/env/
+*.so
+*.dll
+
+# IDE 和系统配置文件
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 日志、临时文件、数据文件
+*.log
+*.tmp
+*.db
+*.sqlite3
+*.bag
+
+# 如果 bin 目录是编译生成的可执行文件，建议整目录忽略
+/bin/
