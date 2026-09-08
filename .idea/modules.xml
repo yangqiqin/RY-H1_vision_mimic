@@ -2,6 +2,10 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/hightorque_robot.iml" filepath="$PROJECT_DIR$/.idea/hightorque_robot.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/hightorque_robot@1.iml" filepath="$PROJECT_DIR$/.idea/hightorque_robot@1.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/lcm.iml" filepath="$PROJECT_DIR$/.idea/lcm.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/lcm@1.iml" filepath="$PROJECT_DIR$/.idea/lcm@1.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/rycan_hand_windows.iml" filepath="$PROJECT_DIR$/.idea/rycan_hand_windows.iml" />
     </modules>
   </component>

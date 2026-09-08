@@ -30,8 +30,8 @@ import numpy as np
 logger = logging.getLogger("arm_safety")
 
 # 默认高度安全区（米，基坐标系）——z 下限防碰桌面，z 上限防升太高
-DEFAULT_MIN_Z = 0.18
-DEFAULT_MAX_Z = 0.68
+DEFAULT_MIN_Z = 0.08
+DEFAULT_MAX_Z = 2.00
 
 # 兼容别名（旧代码可能引用 DEFAULT_MIN_XYZ / DEFAULT_MAX_XYZ 的 z 分量）
 DEFAULT_MIN_XYZ = [0.0, 0.0, DEFAULT_MIN_Z]

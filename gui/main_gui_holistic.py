@@ -260,11 +260,20 @@ class MainGuiHolistic(MainGuiArm):
             parts.append(f"握拳={r.hand_fist_confidence:.2f}")
         self.holistic_status_var.set("状态: " + " | ".join(parts))
 
-        # ---- 机械臂跟随（腕→TCP）----
+        # ---- 机械臂跟随（腕→TCP，带平滑与限频：只有目标明显变化且距上次足够久才 movel，
+        #      消除"每帧小目标→机械臂连续微动抖动"）----
         if self.holistic_arm_follow_var.get() and r.arm_target_pose is not None:
             if self.arm_connected and self.arm is not None:
                 try:
-                    self.arm.movel(r.arm_target_pose, block=False, timeout_s=5)
+                    now = time.time()
+                    tgt3 = np.asarray(r.arm_target_pose[:3], dtype=np.float64)
+                    last = getattr(self, "_legacy_arm_target", None)
+                    if (last is None
+                            or (now - getattr(self, "_legacy_arm_t", 0.0) >= 0.15
+                                and float(np.linalg.norm(tgt3 - last)) >= 0.006)):
+                        self._legacy_arm_target = tgt3.copy()
+                        self._legacy_arm_t = now
+                        self.arm.movel(r.arm_target_pose, block=False, timeout_s=5)
                 except Exception as exc:
                     self.holistic_status_var.set(f"臂跟随异常: {exc}")
 
@@ -276,15 +285,28 @@ class MainGuiHolistic(MainGuiArm):
         return r
 
     def _send_hand_joints(self, angles_rad) -> bool:
-        """灵巧手动作模仿下发（带异常熔断：连续失败暂停 1s，防 PCAN 异常风暴/卡退）。"""
+        """灵巧手动作模仿下发。
+
+        限制：① 最小间隔 70ms（约 14Hz 上限）；② 关节变化不足(平均<0.35°)不重发——
+        手静止时不再每帧重复 16 包 CAN，显著降低"臂+手同开"时的卡顿；③ 连续失败暂停 1s。
+        """
         if self.hand is None:
             return False
         now = time.time()
         if now < getattr(self, "_hand_pause_until", 0.0):
             return False
+        if now - getattr(self, "_hand_last_t", 0.0) < 0.07:
+            return False
+        last = getattr(self, "_hand_last_angles", None)
+        if last is not None:
+            d = sum(abs(a - b) for a, b in zip(angles_rad, last)) / max(1, len(angles_rad))
+            if d < 0.006:   # <0.35° 平均变化 → 跳过
+                return False
         try:
             self.hand.move_joints(list(angles_rad))
             self._hand_fail_streak = 0
+            self._hand_last_t = time.time()
+            self._hand_last_angles = list(angles_rad)
             return True
         except Exception as exc:
             self._hand_fail_streak = getattr(self, "_hand_fail_streak", 0) + 1
@@ -307,26 +329,31 @@ class MainGuiHolistic(MainGuiArm):
     # 覆写 _poll_video：在原有显示后追加 holistic 处理与骨架绘制
     # ==================================================================
     def _poll_video(self):
-        # 调用父类原逻辑（取帧/推理/显示/模仿）
+        # 调用父类原逻辑（取帧/显示）
         super()._poll_video()
-        # 若 holistic 运行且相机在，追加协同处理
-        if self.holistic_running and self.cam is not None:
-            try:
-                # 复用父类已处理的当前帧（父类 _poll_video 已把帧存入 self._last_frame，
-                # 不能再用 frame_q.get_nowait()——队列已被父类消费，再取会空队列）
-                rgb, depth, intrinsics = getattr(self, "_last_frame", (None, None, None))
-                if rgb is None:
-                    return
-                r = self._holistic_step(rgb, depth, intrinsics)
-                # 绘制骨架叠加到画面（在原视频 canvas 上再画一层）
-                if r is not None and self.checkbox_vars["show_skeleton"].get():
-                    try:
-                        disp = self.holistic.draw_skeleton(rgb, [r])
-                        self._draw_holistic_to_canvas(disp)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        # 若 holistic 运行且相机在，追加协同处理（★ 每 3 视频帧一次≈10fps，
+        # 避免 30fps 推理+跟随占满主线程导致严重卡顿抖动）
+        if not (self.holistic_running and self.cam is not None):
+            return
+        if not hasattr(self, "_holistic_counter2"):
+            self._holistic_counter2 = 0
+        self._holistic_counter2 += 1
+        if self._holistic_counter2 % 3 != 0:
+            return
+        try:
+            rgb, depth, intrinsics = getattr(self, "_last_frame", (None, None, None))
+            if rgb is None:
+                return
+            r = self._holistic_step(rgb, depth, intrinsics)
+            # 绘制骨架叠加到画面（每 3 帧一次，降低主线程负载）
+            if r is not None and self.checkbox_vars["show_skeleton"].get():
+                try:
+                    disp = self.holistic.draw_skeleton(rgb, [r])
+                    self._draw_holistic_to_canvas(disp)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _draw_holistic_to_canvas(self, frame: np.ndarray):
         """把 holistic 骨架帧显示到视频画布（等比缩放+居中裁剪，与原逻辑一致）。"""

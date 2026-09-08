@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 main_gui_eye.py —— 眼在手上协同控制（全功能安全版）
 功能：
@@ -24,6 +24,7 @@ except Exception:
     pass
 
 import math
+import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -36,6 +37,9 @@ from arm.arm_follow_eye import EyeInHandFollower
 
 from typing import Optional, List, Dict
 
+# 画面仍有人/手、但手腕 3D 瞬时缺失时，沿用最近一次有效手腕的最长时间（秒）
+WRIST_COAST_S = 2.0
+
 
 class MainGuiEye(MainGuiHolistic):
     def __init__(self, root: tk.Tk):
@@ -44,8 +48,8 @@ class MainGuiEye(MainGuiHolistic):
         self.safety_box = ArmSafetyBox()
         self.following = False
         self.follower: EyeInHandFollower | None = None  # 安全跟随控制器（含碰撞/停滞/姿态锁检测）
-        self.max_step_m = 0.01  # 5mm/帧
-        self.lost_frames_limit = 5
+        self.max_step_m = 0.015  # 5mm/帧
+        self.lost_frames_limit = 1.5      # 丢手超时（秒），时间制判定      # 丢手超时（秒），时间制判定
         self.lost_counter = 0
         self.prev_P_base = None
         self.fixed_rpy = [math.pi, 0.0, 0.0]  # 默认初始值，将被读取替换
@@ -65,6 +69,14 @@ class MainGuiEye(MainGuiHolistic):
         self._eye_fps = 0.0
         self._table_zone_enabled = False  # 是否启用了 WorldZone 桌面危险腔
         self._table_zone_broken = False   # 固件不支持 WorldZone(32601) 缓存，避免每次重复失败调用
+
+        # ---- 后台跟随工作线程（顺畅第一：推理+跟随+手部全在 worker，主线程只显示） ----
+        self._fw_stop: threading.Event | None = None
+        self._fw_thread: threading.Thread | None = None
+        self._wstate: Dict = {}            # worker 发布的状态快照（主线程只读）
+        self._wrist_good = None            # 最近一次有效 wrist（coast 续跟用）
+        self._wrist_good_t = 0.0
+        self._fw_cadence = 0.08            # follower.update 最小间隔（s）≈16Hz 上限
         self._build_eye_ui()
         self._eye_poll_loop()
 
@@ -131,10 +143,10 @@ class MainGuiEye(MainGuiHolistic):
         ttk.Button(sub_c, text="▶ 开始跟随", command=self._eye_start_follow).pack(side="left", padx=2)
         ttk.Button(sub_c, text="⏹ 停止跟随(急停)", command=self._eye_stop_follow).pack(side="left", padx=2)
         ttk.Label(sub_c, text="垂向限幅mm/帧:").pack(side="left", padx=(14, 2))
-        self.eye_step_var = tk.StringVar(value="10")
+        self.eye_step_var = tk.StringVar(value="15")
         ttk.Entry(sub_c, textvariable=self.eye_step_var, width=4).pack(side="left")
-        ttk.Label(sub_c, text="丢手帧数:").pack(side="left", padx=(10, 2))
-        self.eye_lost_var = tk.StringVar(value="5")
+        ttk.Label(sub_c, text="丢手超时s:").pack(side="left", padx=(10, 2))
+        self.eye_lost_var = tk.StringVar(value="1.5")
         ttk.Entry(sub_c, textvariable=self.eye_lost_var, width=4).pack(side="left")
         ttk.Label(sub_c, text="锁腕容差°:").pack(side="left", padx=(10, 2))
         self.eye_wrist_tol_var = tk.StringVar(value="3.0")
@@ -159,6 +171,16 @@ class MainGuiEye(MainGuiHolistic):
         ttk.Entry(sub_c2, textvariable=self.eye_hard_j6_var, width=4).pack(side="left", padx=(0, 10))
 
         ttk.Label(sub_c2, text="(最大90°)", foreground="gray", font=("", 8)).pack(side="left")
+
+        # 伺服实时模式开关（实验性：关节伺服 servoj——异常可能触发控制器安全模式）
+        sub_servo = ttk.Frame(r3)
+        sub_servo.pack(fill="x", padx=2, pady=1)
+        self.servo_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(sub_servo, text="(实验) 伺服实时模式(servoJoint)",
+                        variable=self.servo_var).pack(side="left")
+        ttk.Label(sub_servo, text="（实验性：需控制器程序正常 Running；异常可能触发安全模式，"
+                  "恢复见 docs/控制器安全模式恢复.md）",
+                  foreground="red", font=("", 8)).pack(side="left", padx=6)
 
         # 状态显示行
         sub_d = ttk.Frame(r3)
@@ -451,7 +473,7 @@ class MainGuiEye(MainGuiHolistic):
 
         try:
             self.max_step_m = float(self.eye_step_var.get()) / 1000.0
-            self.lost_frames_limit = int(self.eye_lost_var.get())
+            self.lost_time_s = float(self.eye_lost_var.get())
             self.wrist_tol_deg = float(self.eye_wrist_tol_var.get())
             # ★ 读取各关节独立硬限（最大90°）
             self.wrist_hard_j4_deg = min(float(self.eye_hard_j4_var.get()), 90.0)
@@ -515,29 +537,38 @@ class MainGuiEye(MainGuiHolistic):
         except Exception:
             pass
 
+        # 伺服实验模式二次确认（防止在控制器异常时再次触发安全模式）
+        if getattr(self, "servo_var", None) is not None and self.servo_var.get():
+            if not messagebox.askyesno(
+                    "实验功能确认",
+                    "伺服实时模式为【实验性】：需要控制器程序节点正常 Running。\n"
+                    "若控制器仍处于安全模式/“程序节点未找到”，请先按\n"
+                    "docs/控制器安全模式恢复.md 恢复（示教器复位→断电重启→python tools/recover_arm.py）。\n\n"
+                    "确认控制器状态正常后，继续开启伺服实时模式？"):
+                self.servo_var.set(False)
+                return
+
         # ★ 创建跟随器时传入各关节独立硬限
         # 注意：bound_stop_frames/rpy_tolerance_deg/torque_threshold 用 follower 默认
         # （越界6帧、姿态3°、力矩15N·m连续2帧——均为"降低误急停"校准值，见 arm_follow_eye.py 常量）
         self.follower = EyeInHandFollower(
             arm=self.arm, hand_eye=self.hand_eye, safety_box=self.safety_box,
             max_step_m=max(0.001, self.max_step_m),
-            lost_frames=max(2, self.lost_frames_limit),
+            lost_time_s=max(0.3, min(5.0, self.lost_time_s)),   # 丢手超时（秒）时间制
             fixed_rpy=self.fixed_rpy,
             max_speed=self.arm_fraction_var.get() if hasattr(self, "arm_fraction_var") else 0.15,
             motion_mode="wrist_lock",
+            servo_mode=bool(getattr(self, "servo_var", None) is not None
+                            and self.servo_var.get()),          # ★ 伺服实时模式(servoj)
             wrist_tol_deg=max(0.1, min(15.0, self.wrist_tol_deg)),
             wrist_hard_j4_deg=self.wrist_hard_j4_deg,  # ★ 传递J4硬限
             wrist_hard_j5_deg=self.wrist_hard_j5_deg,  # ★ 传递J5硬限
             wrist_hard_j6_deg=self.wrist_hard_j6_deg,  # ★ 传递J6硬限
         )
         self.follower.begin()
-
-        # 锁腕初始化必须成功
-        if hasattr(self.follower, "_wrist_lock_ok") and not self.follower._wrist_lock_ok:
-            self.eye_state_var.set("⚠️ 锁腕初始化失败（读不到关节角），禁止跟随")
-            self.follower.stop()
-            self.follower = None
-            return
+        # 注：跟随用"固定姿态 IK 直发"（腕自由），不再因锁腕初始化失败而禁止运动
+        if getattr(self.follower, "_servo_ok", False):
+            self._fw_cadence = 0.04    # servo 模式：按 25Hz 稳定下发关节目标
         self.following = True
         self.lost_counter = 0
         self.prev_P_base = None
@@ -554,15 +585,20 @@ class MainGuiEye(MainGuiHolistic):
             pass
 
         self.eye_state_var.set(
-            f"跟随中（限幅{self.max_step_m * 1000:.0f}mm/帧，丢手{self.lost_frames_limit}帧急停，"
+            f"跟随中（限幅{self.max_step_m * 1000:.0f}mm/帧，丢手超时{self.lost_time_s:.1f}s急停，"
             f"姿态锁[{self.fixed_rpy[0]:.2f},{self.fixed_rpy[1]:.2f},{self.fixed_rpy[2]:.2f}]，"
             f"{lock_w} 容差{self.wrist_tol_deg:.1f}°，硬限J4={self.wrist_hard_j4_deg:.0f}° "
             f"J5={self.wrist_hard_j5_deg:.0f}° J6={self.wrist_hard_j6_deg:.0f}°，"
             f"碰撞/停滞/锁腕不可达自动急停）")
         self.eye_status_var.set("状态: 等待手腕检测...")
+        # ★ 启动后台处理线程：推理/臂跟随/手模仿全部移出主线程（顺畅第一）
+        self._stop_follow_worker()          # 清残留
+        self._start_follow_worker()
 
     def _eye_stop_follow(self):
         self.following = False
+        # 先停后台 worker（不再调机械臂），再执行硬停止，避免 RPC 并发
+        self._stop_follow_worker()
         if self.follower is not None:
             self.follower.stop(emergency=True, reason="GUI 手动急停")
             self.follower = None
@@ -578,6 +614,95 @@ class MainGuiEye(MainGuiHolistic):
 
         self.eye_state_var.set("已急停停止")
         self.eye_status_var.set("状态: 已停止")
+
+    # ================== 后台跟随工作线程（顺畅第一） ==================
+    def _start_follow_worker(self):
+        """启动后台处理线程：holistic 推理 + 机械臂跟随 + 灵巧手模仿都在线程里做，
+        主线程只负责视频显示与状态刷新——彻底消除"推理/RPC/CAN 阻塞 GUI"导致的卡顿。"""
+        self._fw_stop = threading.Event()
+        self._wstate = {"msg": "", "wrist": None, "hand": False, "fps": 0.0, "t": 0.0,
+                        "coast": False, "someone": False, "hb": 0.0}
+        self._wrist_good = None
+        self._wrist_good_t = 0.0
+        self._fw_thread = threading.Thread(target=self._follow_worker_main,
+                                           name="eye-follow", daemon=True)
+        self._fw_thread.start()
+
+    def _stop_follow_worker(self, join_s: float = 1.0):
+        if self._fw_stop is not None:
+            self._fw_stop.set()
+        if self._fw_thread is not None:
+            try:
+                self._fw_thread.join(timeout=join_s)
+            except Exception:
+                pass
+        self._fw_thread = None
+        self._fw_stop = None
+
+    def _follow_worker_main(self):
+        # 后台处理：holistic 推理（原分辨率）+ 机械臂跟随 + 灵巧手模仿。
+        # 丢手判定交给 follower 的时间制（lost_time_s=1.5s），本层只做推理与节流。
+        last_arm_t = 0.0
+        lost_poll_t = 0.0
+        while self._fw_stop is not None and not self._fw_stop.is_set():
+            try:
+                now = time.time()
+                if self._wstate is not None:
+                    self._wstate["hb"] = now   # ★ 看门狗心跳：UI 超时检测依据
+                if not self.holistic_running or self.holistic is None or self.cam is None:
+                    # 相机/holistic 停止：低频发送丢手信号（0.25s 一次）
+                    if self.following and self.follower is not None and now - lost_poll_t >= 0.25:
+                        try:
+                            self.follower.update(None)
+                        except Exception:
+                            pass
+                        lost_poll_t = now
+                    time.sleep(0.05)
+                    continue
+                rgb, depth, intrinsics = getattr(self, "_last_frame", (None, None, None))
+                if rgb is None:
+                    time.sleep(0.02)
+                    continue
+                # —— holistic 推理（worker 线程，主线程不被阻塞；原分辨率识别）——
+                r = None
+                try:
+                    res = self.holistic.process(rgb, depth, intrinsics)
+                    r = res[0] if res else None
+                except Exception as exc:
+                    self._wstate["msg"] = f"推理异常: {exc}"
+                    time.sleep(0.05)
+                    continue
+                wrist = r.wrist_3d if r is not None else None
+                # —— 机械臂跟随（最小间隔节流，RPC 不风暴）——
+                if self.following and self.follower is not None \
+                        and self.follower.running and now - last_arm_t >= self._fw_cadence:
+                    if last_arm_t > 0:   # 帧率 HUD + servo t 自适配（防"走-停"）
+                        dt = now - last_arm_t
+                        if dt > 1e-3:
+                            self._eye_fps = 0.8 * self._eye_fps + 0.2 / dt
+                            # servoJoint 的 t 应 ≥ 实际下发周期，否则机器人提前走完会停一下：
+                            # 用实测节拍的 1.2 倍（限幅 0.04~0.15s）自动同步
+                            if getattr(self.follower, "servo_mode", False):
+                                self.follower._servo_t = min(
+                                    0.15, max(0.04, dt * 1.2))
+                    try:
+                        ok, msg = self.follower.update(wrist)
+                        self._wstate["msg"] = msg
+                    except Exception as exc:
+                        self._wstate["msg"] = f"跟随异常: {exc}"
+                    last_arm_t = now
+                # —— 灵巧手模仿（worker 内，含限频与静止不重发）——
+                if (self.holistic_hand_follow_var.get() and r is not None
+                        and r.hand_detected and getattr(r, "hand_angles_deg", None)
+                        and self.hand is not None
+                        and not self.checkbox_vars["mimic_on"].get()):
+                    ang = [math.radians(a) for a in r.hand_angles_deg]
+                    self._send_hand_joints(ang)
+                self._wstate["wrist"] = wrist
+                self._wstate["hand"] = bool(r is not None and r.hand_detected)
+                self._wstate["t"] = now
+            except Exception:
+                time.sleep(0.03)
 
     # ================== 核心跟随逻辑 ==================
     def _eye_step(self, wrist_3d_cam):
@@ -604,17 +729,20 @@ class MainGuiEye(MainGuiHolistic):
             self._eye_step_fallback(wrist_3d_cam)
 
     def _eye_step_fallback(self, wrist_3d_cam):
-        """旧逻辑兜底（仅在 follower 未创建时使用）。"""
+        """旧逻辑兜底（仅在 follower 未创建时使用）；丢手同为时间制。"""
         if wrist_3d_cam is None:
-            self.lost_counter += 1
-            if self.lost_counter >= self.lost_frames_limit:
+            now = time.time()
+            if not hasattr(self, "_fb_lost_t0") or self._fb_lost_t0 is None:
+                self._fb_lost_t0 = now
+            if now - self._fb_lost_t0 >= getattr(self, "lost_time_s", 1.5):
                 try:
                     self.arm.stop_move()
                 except Exception:
                     pass
-                self.eye_state_var.set(f"⚠️ 丢手 {self.lost_counter} 帧，急停！")
+                self.eye_state_var.set(f"⚠️ 丢手超时 {now - self._fb_lost_t0:.1f}s，急停！")
                 self.following = False
             return
+        self._fb_lost_t0 = None
         self.lost_counter = 0
         try:
             P_base = self.hand_eye.camera_to_base(np.array(wrist_3d_cam), self.arm)
@@ -664,21 +792,49 @@ class MainGuiEye(MainGuiHolistic):
     # ================== 轮询与钩子 ==================
     def _eye_poll_loop(self):
         try:
-            # 只读一次位姿，同时刷新两个标签（跟随期间高频 RPC 是画面卡顿主因）
-            pose = self._read_pose_once()
+            # ★ 看门狗：跟随中若 worker 心跳超时(推理/线程卡死) → 自动停止跟随并急停
+            if self.following and self.follower is not None:
+                _w0 = getattr(self, "_wstate", None) or {}
+                if time.time() - float(_w0.get("hb", 0.0)) > 2.5:
+                    self.eye_state_var.set("⚠️ 跟随线程无响应(看门狗超时) → 已急停")
+                    self._eye_stop_follow()
+                    return
+            pose = None
+            if self.following and self.follower is not None:
+                # 跟随中：位姿用 worker 内 follower 的缓存（不新增 RPC，不阻塞）
+                pose = getattr(self.follower, "_last_flange_pose", None)
+                # 状态同步（follower 在 worker 线程更新 stats）
+                st = self.follower.get_stats()
+                msg = st.get("last_status") or ""
+                if msg and msg != self._last_status_shown:
+                    self.eye_status_var.set("状态: " + msg)
+                    self._last_status_shown = msg
+                if not self.follower.running or "急停" in msg:
+                    self.following = False
+                    self.eye_state_var.set("⚠️ " + msg if msg else "⚠️ 已急停")
+            else:
+                pose = self._read_pose_once()
             self._refresh_safety_live(pose)
             self._refresh_follow3d(pose)
-            if self.following and self.arm is not None:
-                pose = self.arm.get_tcp_pose()
-                if pose is not None and len(pose) >= 6:
-                    for i, lbl in enumerate(self.rpy_labels):
-                        lbl.config(text=f"{math.degrees(pose[3 + i]):+7.1f}°")
+            if self.following and pose is not None and len(pose) >= 6:
+                for i, lbl in enumerate(self.rpy_labels):
+                    lbl.config(text=f"{math.degrees(pose[3 + i]):+7.1f}°")
             else:
                 for lbl in self.rpy_labels:
                     lbl.config(text="---")
+            # holistic 状态行来自 worker 快照（独立去重变量，防频闪且不与主状态互扰）
+            w = getattr(self, "_wstate", None) or {}
+            wr = w.get("wrist")
+            if wr is not None:
+                txt = f"状态: 手✓ 腕3D=({wr[0]:.2f},{wr[1]:.2f},{wr[2]:.2f})"
+            else:
+                txt = "状态: 未检测到手腕（开始丢手计时）"
+            if txt != getattr(self, "_last_holistic_shown", ""):
+                self.holistic_status_var.set(txt)
+                self._last_holistic_shown = txt
         except Exception:
             pass
-        self.root.after(300, self._eye_poll_loop)
+        self.root.after(150, self._eye_poll_loop)
 
     def _holistic_step(self, rgb, depth, intrinsics):
         if not self.holistic_running or self.holistic is None:
@@ -728,27 +884,13 @@ class MainGuiEye(MainGuiHolistic):
         return r
 
     def _poll_video(self):
+        # ★ 眼在手上：主线程只显示视频（super）。holistic 推理/臂跟随/手模仿
+        #   由后台工作线程(_follow_worker_main)执行——GUI 不再被推理与 RPC 阻塞。
         super()._poll_video()
-        if not self.holistic_running or self.cam is None:
-            return
-        if not hasattr(self, '_holistic_counter'):
-            self._holistic_counter = 0
-        self._holistic_counter += 1
-        if self._holistic_counter % 3 != 0:
-            return
-        try:
-            rgb, depth, intrinsics = getattr(self, "_last_frame", (None, None, None))
-            if rgb is None:
-                return
-            h, w = rgb.shape[:2]
-            if h < 200 or w < 200:
-                return
-            self._holistic_step(rgb, depth, intrinsics)
-        except Exception:
-            pass
 
     def _on_close(self):
         self.following = False
+        self._stop_follow_worker()
         if self.follower is not None:
             try:
                 self.follower.stop(emergency=True, reason="GUI 关闭")

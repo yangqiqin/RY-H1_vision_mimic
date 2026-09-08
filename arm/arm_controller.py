@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 arm_controller.py —— Aubo（遨博）K5 机械臂高层控制器（Windows 版）
 
@@ -510,6 +510,51 @@ class AuboK5ArmController:
             except Exception:
                 pass
             time.sleep(0.05)
+
+    # ==================================================================
+    # 关节伺服（servoJoint）—— 视觉实时跟随(<0.1s)的正确执行层
+    # 依据 SDK example_servoj2/3：开启 servo 模式后按固定间隔(5~20ms)下发关节目标，
+    # 截断式连续轨迹，绕开 moveJoint 的"路径队列"机制（move 队列曾导致 ret=2 卡顿）。
+    # ==================================================================
+    def start_servo_mode(self, mode: int = 1) -> int:
+        """开启关节伺服模式（setServoModeSelect）。需机械臂 Running 且安全模式 Normal。"""
+        try:
+            ret = self._motion_control.setServoModeSelect(int(mode))
+            if ret != 0:
+                logger.warning("[arm] setServoModeSelect(%d) ret=%d", mode, ret)
+            return ret
+        except Exception as exc:
+            logger.warning("[arm] setServoModeSelect 异常: %s", exc)
+            return -1
+
+    def servo_mode_active(self) -> Optional[bool]:
+        try:
+            return bool(self._motion_control.getServoModeSelect())
+        except Exception:
+            return None
+
+    def stop_servo_mode(self) -> int:
+        """退出伺服模式（setServoMode False）。"""
+        try:
+            return int(self._motion_control.setServoMode(False) or 0)
+        except Exception as exc:
+            logger.warning("[arm] setServoMode(False) 异常: %s", exc)
+            return -1
+
+    def servoj(self, q: List[float], acc_rad_s2: float = 1.0,
+               vel_rad_s: float = 0.6, t_s: float = 0.02,
+               lookahead_s: float = 0.1, gain: float = 200.0) -> int:
+        """下发一个关节伺服目标点。参数见 SDK servoJoint：
+        t=相邻调用间隔(与调用节拍一致)；lookahead 建议=一个控制周期(0.03~0.2)；
+        gain 100~200 越大越稳但到达越慢；相邻点关节差须 ≤±15°(-5 报错则步长过大)。
+        """
+        try:
+            return int(self._motion_control.servoJoint(
+                [float(v) for v in q], float(acc_rad_s2), float(vel_rad_s),
+                float(t_s), float(lookahead_s), float(gain)))
+        except Exception as exc:
+            logger.warning("[arm] servoj 异常: %s", exc)
+            return -1
 
     def movej(self, joint_rad: List[float],
               speed_deg: Optional[float] = None,

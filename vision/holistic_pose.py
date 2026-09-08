@@ -240,7 +240,7 @@ class HolisticPoseEstimator:
             intrinsics: Optional[dict] = None,
             map_to_arm: bool = False,
             arm_mapper=None,
-            max_infer_w: int = 704,
+            max_infer_w: Optional[int] = 0,
     ) -> List[HolisticResult]:
         """
         处理一帧：检测人体 + 双手，解算手部 16 关节角，可选映射机械臂 TCP。
@@ -251,8 +251,9 @@ class HolisticPoseEstimator:
             intrinsics: 相机内参 {fx,fy,ppx,ppy}（可选）
             map_to_arm: 是否把腕部 3D 映射为机械臂 TCP（需 arm_mapper）
             arm_mapper: arm/arm_follow.py 的映射器（callable: wrist_3d -> pose6）
-            max_infer_w: ★ 推理图最大宽度（默认 704）。输入更宽时先等比缩小再送模型，
-                推理耗时约降 4 倍；landmark 为归一化坐标，3D 仍按原图宽高/深度换算，精度无损。
+            max_infer_w: ★ 推理图最大宽度；**0/None=原分辨率（默认，手部识别率最高，
+                此前的 640/704 缩图导致"手在画面却识别不到手"，已回退）**。
+                仅当画面明显卡顿且确认可接受手部误检时才调小加速。
         """
         if rgb_bgr is None:
             return []
@@ -262,7 +263,7 @@ class HolisticPoseEstimator:
             logger.warning(f"[Holistic] 图像尺寸过小 ({w}x{h})，建议 >=480x480")
 
         infer = rgb_bgr
-        if w > max_infer_w:
+        if max_infer_w and w > int(max_infer_w):
             try:
                 import cv2
                 nw = int(max_infer_w)
